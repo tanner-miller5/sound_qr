@@ -1,0 +1,29 @@
+import React from 'react';
+import './Navigation.css';
+
+const Navigation = ({ activeTab, onTabChange }) => {
+  const tabs = [
+    { id: 'encode', label: 'Encode QR', icon: '🔊' },
+    { id: 'decode', label: 'Decode Audio', icon: '🔍' },
+    { id: 'live', label: 'Live Recording', icon: '🎤' }
+  ];
+
+  return (
+    <nav className="navigation">
+      <div className="nav-tabs">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            className={`nav-tab ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => onTabChange(tab.id)}
+          >
+            <span className="nav-icon">{tab.icon}</span>
+            <span className="nav-label">{tab.label}</span>
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+};
+
+export default Navigation;
