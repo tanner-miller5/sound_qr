@@ -29,36 +29,208 @@
   margin: 0 auto;
 }
 
-.encode-section,
-.decode-section,
-.live-section {
+.tab-navigation {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 2rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.5rem;
+}
+
+.tab-button {
+  background: transparent;
+  border: none;
+  color: white;
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.tab-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tab-button.active {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+.tab-content {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 2rem;
+  backdrop-filter: blur(10px);
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.qr-encoder, .qr-decoder {
+  text-align: left;
+}
+
+.qr-encoder h2, .qr-decoder h2 {
+  text-align: center;
+  margin-bottom: 2rem;
+  font-size: 2rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.file-upload {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.file-upload-label {
+  display: block;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px dashed rgba(255, 255, 255, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.3s ease;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-upload-label:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+textarea, select {
+  width: 100%;
+  padding: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-size: 1rem;
+  resize: vertical;
+}
+
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+textarea:focus, select:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.encode-button, .decode-button {
+  background: linear-gradient(45deg, #4facfe 0%, #00f2fe 100%);
+  border: none;
+  color: white;
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.encode-button:hover, .decode-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(79, 172, 254, 0.3);
+}
+
+.encode-button:disabled, .decode-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.error-message {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fecaca;
+  padding: 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.result-section {
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #bbf7d0;
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.result-section h3 {
+  margin-top: 0;
+  color: #4ade80;
+}
+
+.audio-controls {
+  margin: 1rem 0;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
-  align-items: center;
+  gap: 1rem;
+}
+
+.audio-controls audio {
+  width: 100%;
+}
+
+.download-button {
+  background: rgba(34, 197, 94, 0.8);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  text-decoration: none;
+  border-radius: 6px;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.download-button:hover {
+  background: rgba(34, 197, 94, 1);
+  transform: translateY(-1px);
 }
 
 .decoded-result {
   background: rgba(255, 255, 255, 0.1);
   padding: 1.5rem;
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  max-width: 500px;
-  margin: 1rem auto;
+  border-radius: 8px;
+  margin: 1rem 0;
 }
 
-.decoded-result h3 {
-  margin-top: 0;
+.decoded-result h4 {
   color: #4ade80;
+  margin-bottom: 0.5rem;
 }
 
-.decoded-result p {
-  word-break: break-all;
-  font-family: monospace;
+.decoded-data pre {
   background: rgba(0, 0, 0, 0.2);
   padding: 1rem;
-  border-radius: 8px;
-  margin: 0.5rem 0 0 0;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: 'Courier New', monospace;
+  margin: 0;
 }
 
 @media (max-width: 768px) {
@@ -72,5 +244,17 @@
   
   .App-main {
     padding: 1rem;
+  }
+  
+  .tab-content {
+    padding: 1rem;
+  }
+  
+  .tab-navigation {
+    flex-direction: column;
+  }
+  
+  .tab-button {
+    margin: 0.25rem 0;
   }
 }
