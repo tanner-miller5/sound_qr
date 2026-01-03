@@ -10,6 +10,164 @@ export class QRProcessor {
     };
   }
 
+  // Add the missing generateQR method
+  async generateQR(text, version = 1) {
+    try {
+      // Import the QR code library
+      const QRCode = (await import('qrcode')).default;
+      
+      const spec = this.versionSpecs[version];
+      if (!spec) {
+        throw new Error(`Unsupported QR version: ${version}`);
+      }
+
+      // Generate QR code with specific version and error correction
+      const qrOptions = {
+        version: version,
+        errorCorrectionLevel: 'M', // Medium error correction (~15%)
+        type: 'terminal', // Get raw data
+        small: true
+      };
+
+      // Generate the QR code matrix
+      const qrString = await QRCode.toString(text, qrOptions);
+      
+      // Parse the QR string into a matrix
+      const lines = qrString.trim().split('\n');
+      const matrix = [];
+      
+      for (let row = 0; row < lines.length; row++) {
+        const line = lines[row];
+        const matrixRow = [];
+        
+        // Parse each character (█ = 1, space = 0)
+        for (let col = 0; col < line.length; col += 2) { // Each block is 2 characters wide
+          const char = line.substring(col, col + 2);
+          matrixRow.push(char.includes('█') ? 1 : 0);
+        }
+        
+        // Only add rows that match expected size
+        if (matrixRow.length === spec.size) {
+          matrix.push(matrixRow);
+        }
+      }
+
+      // Validate matrix size
+      if (matrix.length !== spec.size) {
+        console.warn(`Matrix size mismatch: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
+        
+        // Fallback: create a simple test matrix for debugging
+        console.log('Creating fallback test matrix...');
+        const testMatrix = this.createTestMatrix(spec.size, text);
+        return {
+          matrix: testMatrix,
+          version: version,
+          text: text,
+          fallback: true
+        };
+      }
+
+      console.log(`Generated QR matrix: ${matrix.length}x${matrix[0].length} for version ${version}`);
+      
+      return {
+        matrix: matrix,
+        version: version,
+        text: text,
+        fallback: false
+      };
+
+    } catch (error) {
+      console.warn(`QR generation failed: ${error.message}, using fallback`);
+      
+      // Fallback: create a simple test matrix
+      const spec = this.versionSpecs[version];
+      const testMatrix = this.createTestMatrix(spec.size, text);
+      
+      return {
+        matrix: testMatrix,
+        version: version,
+        text: text,
+        fallback: true
+      };
+    }
+  }
+
+  // Create a simple test matrix for fallback
+  createTestMatrix(size, text) {
+    const matrix = [];
+    
+    // Create a predictable pattern based on text
+    const textHash = this.simpleHash(text);
+    
+    for (let row = 0; row < size; row++) {
+      const matrixRow = [];
+      for (let col = 0; col < size; col++) {
+        // Create a pattern that includes some data based on position and text hash
+        const value = ((row + col + textHash) % 3 === 0) ? 1 : 0;
+        matrixRow.push(value);
+      }
+      matrix.push(matrixRow);
+    }
+    
+    console.log(`Created ${size}x${size} test matrix for "${text}"`);
+    return matrix;
+  }
+
+  // Simple hash function for test data
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash) % 100;
+  }
+
+  // Add the missing processColumn method
+  processColumn(matrix, colIndex, version) {
+    const spec = this.versionSpecs[version];
+    if (!spec) {
+      throw new Error(`Invalid version: ${version}`);
+    }
+
+    if (colIndex >= matrix.length) {
+      throw new Error(`Column index ${colIndex} out of bounds for matrix size ${matrix.length}`);
+    }
+
+    // Extract column data
+    const column = matrix[colIndex];
+    
+    // Convert column to binary string
+    let binaryData = column.map(bit => bit.toString()).join('');
+    
+    // Add padding to make it divisible by 6
+    const paddedLength = spec.paddedBits;
+    const paddingNeeded = paddedLength - binaryData.length;
+    
+    if (paddingNeeded > 0) {
+      binaryData += '0'.repeat(paddingNeeded);
+    } else if (paddingNeeded < 0) {
+      // Truncate if somehow too long
+      binaryData = binaryData.substring(0, paddedLength);
+    }
+
+    // Split into 6-bit chunks
+    const chunks = [];
+    for (let i = 0; i < binaryData.length; i += 6) {
+      const chunk = binaryData.substring(i, i + 6);
+      const value = parseInt(chunk, 2);
+      chunks.push(value);
+    }
+
+    // Validate chunk count
+    if (chunks.length !== spec.chunks) {
+      throw new Error(`Chunk count mismatch: expected ${spec.chunks}, got ${chunks.length}`);
+    }
+
+    return chunks;
+  }
+
   getCycleTiming(version) {
     const spec = this.versionSpecs[version];
     if (!spec) throw new Error(`Unsupported QR version: ${version}`);
