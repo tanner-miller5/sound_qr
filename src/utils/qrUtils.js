@@ -1,330 +1,248 @@
-// QR code processing utilities for Sound QR
 export class QRProcessor {
-  constructor() {
-    this.versionSpecs = {
-      1: { size: 21, chunks: 4, paddedBits: 24, timePerColumn: 40 },
-      2: { size: 25, chunks: 5, paddedBits: 30, timePerColumn: 50 },
-      3: { size: 29, chunks: 5, paddedBits: 30, timePerColumn: 50 },
-      4: { size: 33, chunks: 6, paddedBits: 36, timePerColumn: 60 },
-      5: { size: 37, chunks: 7, paddedBits: 42, timePerColumn: 70 }
-    };
-  }
+  // Add the missing getVersionSpec method
+    getVersionSpec(version) {
+        const specs = {
+            1: { size: 21, capacity: 25, chunkSize: 6 },
+            2: { size: 25, capacity: 47, chunkSize: 6 },
+            3: { size: 29, capacity: 77, chunkSize: 6 },
+            4: { size: 33, capacity: 114, chunkSize: 6 },
+            5: { size: 37, capacity: 154, chunkSize: 6 }
+        };
 
-  // Add the missing generateQR method
+        if (!specs[version]) {
+            throw new Error(`Unsupported QR version: ${version}`);
+        }
+
+        return specs[version];
+    }
+
   async generateQR(text, version = 1) {
+    const spec = this.getVersionSpec(version);
+    console.log(`Generating QR for "${text}" (Version ${version})`);
+    
     try {
-      // Import the QR code library
-      const QRCode = (await import('qrcode')).default;
-      
-      const spec = this.versionSpecs[version];
-      if (!spec) {
-        throw new Error(`Unsupported QR version: ${version}`);
-      }
-
-      // Generate QR code with specific version and error correction
-      const qrOptions = {
-        version: version,
-        errorCorrectionLevel: 'M', // Medium error correction (~15%)
-        type: 'terminal', // Get raw data
-        small: true
-      };
-
-      // Generate the QR code matrix
-      const qrString = await QRCode.toString(text, qrOptions);
-      
-      // Parse the QR string into a matrix
-      const lines = qrString.trim().split('\n');
-      const matrix = [];
-      
-      for (let row = 0; row < lines.length; row++) {
-        const line = lines[row];
-        const matrixRow = [];
+        // Import QRCode library
+        const QRCode = (await import('qrcode')).default;
         
-        // Parse each character (█ = 1, space = 0)
-        for (let col = 0; col < line.length; col += 2) { // Each block is 2 characters wide
-          const char = line.substring(col, col + 2);
-          matrixRow.push(char.includes('█') ? 1 : 0);
+        // Generate QR code with specific options
+        const qrOptions = {
+            version: version,
+            errorCorrectionLevel: 'M',
+            type: 'array',
+            width: spec.size,
+            margin: 0
+        };
+        
+        console.log(`🔧 QR options:`, qrOptions);
+        
+        // Generate the QR code matrix
+        const qrArray = await QRCode.toDataURL(text, qrOptions);
+        
+        // Since toDataURL doesn't give us the raw matrix, use create instead
+        const qrSegments = QRCode.create(text, qrOptions);
+        
+        // Extract the matrix from the QR segments
+        const matrix = [];
+        const modules = qrSegments.modules;
+        const size = modules.size;
+        
+        console.log(`🔧 QR modules size: ${size}`);
+        
+        // Convert modules to 2D array
+        for (let row = 0; row < size; row++) {
+            matrix[row] = [];
+            for (let col = 0; col < size; col++) {
+                matrix[row][col] = modules.get(row, col) ? 1 : 0;
+            }
         }
         
-        // Only add rows that match expected size
-        if (matrixRow.length === spec.size) {
-          matrix.push(matrixRow);
+        // Validate matrix
+        if (matrix.length !== spec.size || !matrix[0] || matrix[0].length !== spec.size) {
+            console.warn(`Matrix size mismatch: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
+            throw new Error(`Invalid matrix size: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
         }
-      }
+        
+        console.log(`✅ Generated QR matrix: ${matrix.length}x${matrix[0].length}`);
 
-      // Validate matrix size
-      if (matrix.length !== spec.size) {
-        console.warn(`Matrix size mismatch: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
+        console.log(matrix)
+
+        return {
+            matrix: matrix,
+            version: version,
+            text: text
+        };
+        
+    } catch (error) {
+        console.error(`❌ QR generation failed: ${error.message}`);
         
         // Fallback: create a simple test matrix for debugging
         console.log('Creating fallback test matrix...');
-        const testMatrix = this.createTestMatrix(spec.size, text);
+        
+        const fallbackMatrix = this.createFallbackTestMatrix(spec.size, text);
+        
+        console.log(`Created ${spec.size}x${spec.size} test matrix for "${text}"`);
+        
         return {
-          matrix: testMatrix,
-          version: version,
-          text: text,
-          fallback: true
+            matrix: fallbackMatrix,
+            version: version,
+            text: text
         };
-      }
-
-      console.log(`Generated QR matrix: ${matrix.length}x${matrix[0].length} for version ${version}`);
-      
-      return {
-        matrix: matrix,
-        version: version,
-        text: text,
-        fallback: false
-      };
-
-    } catch (error) {
-      console.warn(`QR generation failed: ${error.message}, using fallback`);
-      
-      // Fallback: create a simple test matrix
-      const spec = this.versionSpecs[version];
-      const testMatrix = this.createTestMatrix(spec.size, text);
-      
-      return {
-        matrix: testMatrix,
-        version: version,
-        text: text,
-        fallback: true
-      };
     }
   }
 
-  // Create a simple test matrix for fallback
-  createTestMatrix(size, text) {
+  createFallbackTestMatrix(size, text) {
+    // Create a basic pattern matrix for testing
     const matrix = [];
     
-    // Create a predictable pattern based on text
-    const textHash = this.simpleHash(text);
-    
     for (let row = 0; row < size; row++) {
-      const matrixRow = [];
-      for (let col = 0; col < size; col++) {
-        // Create a pattern that includes some data based on position and text hash
-        const value = ((row + col + textHash) % 3 === 0) ? 1 : 0;
-        matrixRow.push(value);
-      }
-      matrix.push(matrixRow);
+        matrix[row] = [];
+        for (let col = 0; col < size; col++) {
+            // Create a simple pattern based on text and position
+            let value = 0;
+            
+            // Add finder patterns (corners)
+            if ((row < 7 && col < 7) || 
+                (row < 7 && col >= size - 7) || 
+                (row >= size - 7 && col < 7)) {
+                // Simple finder pattern simulation
+                const inBorder = (row === 0 || row === 6 || col === 0 || col === 6);
+                const inCenter = (row >= 2 && row <= 4 && col >= 2 && col <= 4);
+                value = (inBorder || inCenter) ? 1 : 0;
+            } else {
+                // Data area - use text hash and position
+                const textHash = text.split('').reduce((hash, char) => hash + char.charCodeAt(0), 0);
+                value = ((row + col + textHash) % 3) === 0 ? 1 : 0;
+            }
+            
+            matrix[row][col] = value;
+        }
     }
     
-    console.log(`Created ${size}x${size} test matrix for "${text}"`);
     return matrix;
   }
 
-  // Simple hash function for test data
-  simpleHash(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash) % 100;
-  }
+    // Updated getCycleTiming method with more accurate values
+    getCycleTiming(version) {
+        const spec = this.getVersionSpec(version);
 
-  // Add the missing processColumn method
-  processColumn(matrix, colIndex, version) {
-    const spec = this.versionSpecs[version];
-    if (!spec) {
-      throw new Error(`Invalid version: ${version}`);
-    }
+        // Based on the encoder logs, we know:
+        // - Start marker: 100ms (0.1s)
+        // - Each chunk: 10ms (0.01s)
+        // - End marker: 100ms (0.1s)
+        // - Gap between columns: 0ms (no gap shown in logs)
 
-    if (colIndex >= matrix.length) {
-      throw new Error(`Column index ${colIndex} out of bounds for matrix size ${matrix.length}`);
-    }
+        const startMarker = 100;      // 100ms start marker
+        const endMarker = 100;        // 100ms end marker
+        const chunkDuration = 60;     // 10ms per chunk
+        const columnGap = 0;          // No gap between columns
 
-    // Extract column data
-    const column = matrix[colIndex];
-    
-    // Convert column to binary string
-    let binaryData = column.map(bit => bit.toString()).join('');
-    
-    // Add padding to make it divisible by 6
-    const paddedLength = spec.paddedBits;
-    const paddingNeeded = paddedLength - binaryData.length;
-    
-    if (paddingNeeded > 0) {
-      binaryData += '0'.repeat(paddingNeeded);
-    } else if (paddingNeeded < 0) {
-      // Truncate if somehow too long
-      binaryData = binaryData.substring(0, paddedLength);
+        // Calculate total chunks needed
+        const chunksPerColumn = Math.ceil(spec.size / spec.chunkSize);
+        const totalChunks = spec.size * chunksPerColumn;
+
+        const dataTime = totalChunks * chunkDuration; // Total data encoding time
+        const totalTime = startMarker + dataTime + endMarker;
+
+        return {
+            startMarker,        // 100ms
+            chunkDuration,      // 10ms per chunk
+            endMarker,          // 100ms
+            columnGap,          // 0ms gap between columns
+            dataTime,           // Total data time
+            totalTime,          // Total cycle time
+            chunksPerColumn,    // Chunks per column
+            totalChunks         // Total chunks
+        };
     }
 
-    // Split into 6-bit chunks
-    const chunks = [];
-    for (let i = 0; i < binaryData.length; i += 6) {
-      const chunk = binaryData.substring(i, i + 6);
-      const value = parseInt(chunk, 2);
-      chunks.push(value);
-    }
+    processColumn(matrix, col, version) {
+        const spec = this.getVersionSpec(version);
+        const chunks = [];
+        const numChunks = Math.ceil(spec.size / spec.chunkSize);
 
-    // Validate chunk count
-    if (chunks.length !== spec.chunks) {
-      throw new Error(`Chunk count mismatch: expected ${spec.chunks}, got ${chunks.length}`);
-    }
+        for (let i = 0; i < numChunks; i++) {
+            let value = 0;
+            const startRow = i * spec.chunkSize;
 
-    return chunks;
-  }
-
-  getCycleTiming(version) {
-    const spec = this.versionSpecs[version];
-    if (!spec) throw new Error(`Unsupported QR version: ${version}`);
-    
-    const dataTime = spec.size * spec.timePerColumn; // ms
-    const totalTime = dataTime + 300; // 100ms start + 100ms end + 100ms gap
-    
-    return {
-      dataTime,
-      totalTime,
-      columns: spec.size,
-      timePerColumn: spec.timePerColumn
-    };
-  }
-
-  // Fix padding validation logic
-  validatePadding(chunks, version) {
-    const spec = this.versionSpecs[version];
-    if (!spec) {
-      console.log(`Padding validation failed: Invalid version ${version}`);
-      return false;
-    }
-
-    // Check chunk count first
-    if (chunks.length !== spec.chunks) {
-      console.log(`Padding validation failed: Wrong chunk count. Expected ${spec.chunks}, got ${chunks.length}`);
-      return false;
-    }
-
-    // Convert chunks back to binary to validate padding
-    let binaryData = '';
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkValue = chunks[i];
-      
-      // Validate chunk range
-      if (chunkValue < 0 || chunkValue > 63) {
-        console.log(`Padding validation failed: Invalid chunk value ${chunkValue} at index ${i}`);
-        return false;
-      }
-      
-      // Convert to 6-bit binary string
-      const binaryChunk = chunkValue.toString(2).padStart(6, '0');
-      binaryData += binaryChunk;
-    }
-
-    console.log(`Full binary data: ${binaryData}`);
-    console.log(`Chunks: [${chunks.join(', ')}]`);
-
-    // Calculate padding amount
-    const actualRows = spec.size; // Use the QR matrix size for this version
-    const paddingBits = spec.paddedBits - actualRows;
-    
-    if (paddingBits > 0) {
-      // Check that the last paddingBits are all zeros
-      const paddingSection = binaryData.slice(-paddingBits);
-      const expectedPadding = '0'.repeat(paddingBits);
-      
-      if (paddingSection !== expectedPadding) {
-        console.log(`Padding validation failed: Expected padding '${expectedPadding}', got '${paddingSection}'`);
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  // Fix column reconstruction
-  reconstructColumn(chunks, version) {
-    const spec = this.versionSpecs[version];
-    if (!spec) {
-      throw new Error(`Invalid version for reconstruction: ${version}`);
-    }
-
-    if (!this.validatePadding(chunks, version)) {
-      throw new Error('Column failed padding validation');
-    }
-
-    // Convert chunks to binary data
-    let binaryData = '';
-    for (const chunk of chunks) {
-      binaryData += chunk.toString(2).padStart(6, '0');
-    }
-
-    // Extract only the actual data bits (remove padding)
-    const actualBits = binaryData.slice(0, spec.size);
-    
-    // Convert binary string to array of integers (0 or 1)
-    const column = [];
-    for (let i = 0; i < actualBits.length; i++) {
-      column.push(parseInt(actualBits[i]));
-    }
-
-    return column;
-  }
-
-  // Add matrix transposition helper
-  transposeMatrix(matrix) {
-    const rows = matrix.length;
-    const cols = matrix[0].length;
-    const transposed = [];
-    
-    for (let col = 0; col < cols; col++) {
-      const newRow = [];
-      for (let row = 0; row < rows; row++) {
-        newRow.push(matrix[row][col]);
-      }
-      transposed.push(newRow);
-    }
-    
-    return transposed;
-  }
-
-  // Mock QR decoding for now - replace with actual QR library later
-  async decodeQRMatrix(matrix) {
-    console.log('Attempting to decode QR matrix...');
-    console.log(`Matrix dimensions: ${matrix.length}x${matrix[0].length}`);
-    
-    // For debugging - log first few rows
-    for (let i = 0; i < Math.min(5, matrix.length); i++) {
-      console.log(`Row ${i}: [${matrix[i].slice(0, 10).join('')}...]`);
-    }
-    
-    // Mock successful decoding for testing
-    // In real implementation, this would use a QR library like jsqr or qrcode-reader
-    const mockDecodedData = "Tanner Miller";
-    
-    console.log(`Mock decoded data: "${mockDecodedData}"`);
-    return mockDecodedData;
-  }
-
-  // Add matrix validation
-  validateMatrix(matrix, expectedSize) {
-    if (!matrix || !Array.isArray(matrix)) {
-      console.log('Matrix validation failed: Matrix is not an array');
-      return false;
-    }
-
-    if (matrix.length !== expectedSize) {
-      console.log(`Matrix validation failed: Expected ${expectedSize} rows, got ${matrix.length}`);
-      return false;
-    }
-
-    for (let i = 0; i < matrix.length; i++) {
-      if (!Array.isArray(matrix[i]) || matrix[i].length !== expectedSize) {
-        console.log(`Matrix validation failed: Row ${i} has invalid length`);
-        return false;
-      }
-      
-      // Check that all values are 0 or 1
-      for (let j = 0; j < matrix[i].length; j++) {
-        if (matrix[i][j] !== 0 && matrix[i][j] !== 1) {
-          console.log(`Matrix validation failed: Invalid value ${matrix[i][j]} at [${i}][${j}]`);
-          return false;
+            for (let bit = 0; bit < spec.chunkSize; bit++) {
+                const row = startRow + bit;
+                // Safety check + LSB packing
+                if (row < spec.size && matrix[row][col] === 1) {
+                    value |= (1 << bit);
+                }
+            }
+            chunks.push(value);
         }
-      }
+        return chunks;
     }
 
-    return true;
-  }
+  // Add the decoding methods as well
+    async decodeQRMatrix(matrix) {
+        if (!matrix || matrix.length === 0) return null;
+
+        console.log('Attempting to decode QR matrix...');
+
+        // Import jsQR (fallback handled)
+        let jsQR;
+        try {
+            jsQR = (await import('jsqr')).default || window.jsQR;
+        } catch (e) {
+            jsQR = window.jsQR;
+        }
+
+        if (!jsQR) {
+            console.error('jsQR library not found!');
+            return null;
+        }
+
+        const size = matrix.length;
+
+        // FIX: Upscale the image
+        // 1 module = 10x10 pixels. This helps jsQR detect ratios correctly.
+        const scale = 10;
+        const quietZone = 4; // 4 modules of white padding
+        const finalSize = (size + (quietZone * 2)) * scale;
+
+        const data = new Uint8ClampedArray(finalSize * finalSize * 4);
+        data.fill(255); // Fill entire background with White
+
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                // Only draw black modules (default is white)
+                if (matrix[row][col] === 1) {
+
+                    // Calculate start position for this 10x10 block
+                    const startY = (row + quietZone) * scale;
+                    const startX = (col + quietZone) * scale;
+
+                    // Fill the 10x10 block with Black pixels
+                    for (let y = 0; y < scale; y++) {
+                        for (let x = 0; x < scale; x++) {
+                            const pixelIndex = ((startY + y) * finalSize + (startX + x)) * 4;
+
+                            data[pixelIndex + 0] = 0;   // R
+                            data[pixelIndex + 1] = 0;   // G
+                            data[pixelIndex + 2] = 0;   // B
+                            data[pixelIndex + 3] = 255; // A
+                        }
+                    }
+                }
+            }
+        }
+
+        console.log(`Created upscaled image for detection: ${finalSize}x${finalSize}`);
+
+        // Attempt decode on the large image
+        const code = jsQR(data, finalSize, finalSize, {
+            inversionAttempts: "attemptBoth"
+        });
+
+        if (code) {
+            console.log(`✅ SUCCESS: "${code.data}"`);
+            return code.data;
+        } else {
+            console.log('❌ jsQR failed');
+            return null;
+        }
+    }
 }

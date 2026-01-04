@@ -98,68 +98,124 @@ const QRDecoder = () => {
   }
 }, [audioFile]);
 
-// Fix the generateFullTestQR method
+// Simplified generateFullTestQR method with fixed RMS calculation
 const generateFullTestQR = useCallback(async () => {
   try {
-    // Initialize audio context first
-    await audioProcessor.initAudioContext();
+    console.log('🚀 Starting test QR generation...');
     
-    // Create a short silence as base audio
-    const duration = 5; // 5 seconds
+    // Initialize audio context
+    await audioProcessor.initAudioContext();
     const sampleRate = audioProcessor.sampleRate;
+    
+    // Create base audio buffer with quiet background noise
+    const duration = 20; // 20 seconds for Version 1 QR
     const samples = new Float32Array(duration * sampleRate);
-    samples.fill(0); // Start with silence
+    
+    // Add very quiet background noise to prevent complete silence
+    for (let i = 0; i < samples.length; i++) {
+      samples[i] = (Math.random() - 0.5) * 0.001; // Very quiet noise at -60dB
+    }
     
     const baseAudioBuffer = audioProcessor.audioContext.createBuffer(1, samples.length, sampleRate);
     baseAudioBuffer.copyToChannel(samples, 0);
     
-    // Create a test file
-    const testFile = new File([new ArrayBuffer(1000)], 'test.wav', { type: 'audio/wav' });
+    console.log(`🔧 Created base audio: ${duration}s, ${sampleRate}Hz, ${samples.length} samples`);
     
-    // Use encoder to create a proper Sound QR encoding
+    // Load encoder and set up mocking
     const { SoundQREncoder } = await import('../utils/soundQREncoder');
     const encoder = new SoundQREncoder();
-    
-    // IMPORTANT: Initialize the encoder's audio processor
     await encoder.audioProcessor.initAudioContext();
     
-    // Mock the file loading to return our test buffer
+    // Mock the loadAudioFile method
     const originalLoad = encoder.audioProcessor.loadAudioFile;
-    encoder.audioProcessor.loadAudioFile = async () => baseAudioBuffer;
+    encoder.audioProcessor.loadAudioFile = async () => {
+      console.log('🔧 Using mock audio buffer for encoding');
+      return baseAudioBuffer;
+    };
     
-    console.log('Generating test QR encoding for "Tanner Miller"...');
-    const result = await encoder.encode(testFile, "Tanner Miller", { 
+    console.log('🔧 Encoding "Hello World" as Version 1 QR...');
+    
+    const testFile = new File([new ArrayBuffer(1000)], 'test.wav', { type: 'audio/wav' });
+    const result = await encoder.encode(testFile, "Hello World", { 
       version: 1, 
       cycles: 3,
-      amplitude: 0.5  // Increased from default 0.1 to 0.5 for stronger signals
+      amplitude: 0.1
     });
     
     // Restore original method
     encoder.audioProcessor.loadAudioFile = originalLoad;
     
-    // Convert to downloadable WAV
+    console.log('✅ Encoding successful:', result);
+    
+    // FIXED: Verify the result has audio signal using batched processing
+    const resultChannelData = result.audioBuffer.getChannelData(0);
+    
+    // Calculate RMS in batches to prevent stack overflow
+    let rmsSum = 0;
+    let peak = 0;
+    const batchSize = 10000; // 10k samples per batch
+    
+    console.log(`🔧 Verifying result audio: ${resultChannelData.length} samples...`);
+    
+    for (let i = 0; i < resultChannelData.length; i += batchSize) {
+      const endIdx = Math.min(i + batchSize, resultChannelData.length);
+      
+      // Process batch for RMS
+      let batchSum = 0;
+      for (let j = i; j < endIdx; j++) {
+        const sample = resultChannelData[j];
+        batchSum += sample * sample;
+        const absSample = Math.abs(sample);
+        if (absSample > peak) peak = absSample;
+      }
+      rmsSum += batchSum;
+      
+      // Yield occasionally
+      if (i % (batchSize * 5) === 0) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+    }
+    
+    const resultRMS = Math.sqrt(rmsSum / resultChannelData.length);
+    
+    console.log(`🔍 Result verification - RMS: ${resultRMS.toFixed(6)}, Peak: ${peak.toFixed(6)}`);
+    
+    if (resultRMS === 0 || peak === 0) {
+      throw new Error('Generated audio is silent - encoding failed');
+    }
+    
+    // Convert to WAV with improved method
+    console.log('🔧 Converting to downloadable WAV file...');
     const wav = await audioBufferToWav(result.audioBuffer);
     const blob = new Blob([wav], { type: 'audio/wav' });
     const url = URL.createObjectURL(blob);
     
+    // Download the file
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'test-tanner-miller-qr.wav';
+    a.download = 'test-hello-world-sound-qr.wav';
     a.click();
     
-    console.log('Test QR file generated successfully!');
-    console.log('QR Data:', result.qrData);
-    console.log('Timing:', result.timing);
-    
-    alert('Test QR file generated and downloaded! Check your downloads folder for "test-tanner-miller-qr.wav"');
+    console.log('🎉 Test QR file generated successfully!');
+    alert('✅ Test QR file generated and downloaded successfully!\n\n' +
+          `File: test-hello-world-sound-qr.wav\n` +
+          `Duration: ${result.audioBuffer.duration.toFixed(2)}s\n` +
+          `QR Data: "Hello World"\n` +
+          `Version: ${result.qrData.version}\n` +
+          `Cycles: ${result.cycles}\n\n` +
+          'Check your Downloads folder and try decoding this file!');
     
   } catch (err) {
-    console.error('Test generation failed:', err);
+    console.error('❌ Test generation failed:', err);
     setError(`Test generation failed: ${err.message}`);
+    alert(`❌ Test generation failed: ${err.message}\n\nCheck the browser console for details.`);
   }
-}, []);
+}, [audioProcessor]);
 
-  const audioBufferToWav = async (audioBuffer) => {
+const audioBufferToWav = async (audioBuffer) => {
+  try {
+    console.log(`🔧 Converting audio buffer to WAV: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.numberOfChannels} channels`);
+    
     const numberOfChannels = audioBuffer.numberOfChannels;
     const length = audioBuffer.length * numberOfChannels * 2;
     const buffer = new ArrayBuffer(44 + length);
@@ -186,17 +242,40 @@ const generateFullTestQR = useCallback(async () => {
     writeString(36, 'data');
     view.setUint32(40, length, true);
     
+    // FIXED: Process audio data in smaller batches to prevent stack overflow
     let offset = 44;
-    for (let i = 0; i < audioBuffer.length; i++) {
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const sample = Math.max(-1, Math.min(1, audioBuffer.getChannelData(channel)[i]));
-        view.setInt16(offset, sample * 0x7FFF, true);
-        offset += 2;
+    const batchSize = 1000; // Process 1000 samples at a time
+    
+    console.log(`🔧 Processing ${audioBuffer.length} samples in batches of ${batchSize}...`);
+    
+    for (let i = 0; i < audioBuffer.length; i += batchSize) {
+      const endIdx = Math.min(i + batchSize, audioBuffer.length);
+      
+      // Process this batch
+      for (let sampleIdx = i; sampleIdx < endIdx; sampleIdx++) {
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+          const channelData = audioBuffer.getChannelData(channel);
+          const sample = Math.max(-1, Math.min(1, channelData[sampleIdx]));
+          view.setInt16(offset, sample * 0x7FFF, true);
+          offset += 2;
+        }
+      }
+      
+      // Yield control every batch to prevent blocking
+      if (i % (batchSize * 10) === 0) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+        console.log(`🔧 WAV conversion progress: ${((i / audioBuffer.length) * 100).toFixed(1)}%`);
       }
     }
     
+    console.log(`✅ WAV conversion complete: ${buffer.byteLength} bytes`);
     return buffer;
-  };
+    
+  } catch (error) {
+    console.error(`❌ WAV conversion failed: ${error.message}`);
+    throw new Error(`WAV conversion failed: ${error.message}`);
+  }
+};
 
   const handleDecode = useCallback(async () => {
     if (!audioFile) {

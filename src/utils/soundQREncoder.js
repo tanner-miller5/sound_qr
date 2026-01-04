@@ -24,10 +24,12 @@ export class SoundQREncoder {
     for (let i = 0; i < channelData.length; i++) {
       peak = Math.max(peak, Math.abs(channelData[i]));
     }
-    
-    // Calculate -20dB relative amplitude
-    const embedAmplitude = peak * 0.1; // -20dB = 10^(-20/20) = 0.1
-    
+
+    // FIX: Enforce a minimum amplitude (e.g., 0.02 which is roughly -34dB)
+    // This ensures the QR code is generated even on silent files
+    const minAmplitude = 0.02;
+    const embedAmplitude = Math.max(peak * 0.1, minAmplitude);
+
     // Generate QR code
     const qrData = await this.qrProcessor.generateQR(qrText, version);
     
@@ -80,7 +82,10 @@ async encodeQRIntoAudio(qrData, cycles, amplitude) {
 
     for (let cycle = 0; cycle < cycles; cycle++) {
       // Start marker
-      const startMarker = this.audioProcessor.generateTone(markers.start, 0.1, amplitude);
+      const startMarker = this.audioProcessor.generateTone(
+          markers.start,
+          timing.startMarker / 1000,
+          amplitude);
       console.log(`Cycle ${cycle}: Start marker ${markers.start}Hz, ${startMarker.length} samples, amplitude ${amplitude}`);
       this.addSamples(encodedSamples, startMarker, sampleOffset);
       sampleOffset += startMarker.length;
@@ -101,15 +106,25 @@ async encodeQRIntoAudio(qrData, cycles, amplitude) {
         // Encode each chunk in column
         for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
           const frequency = frequencies[chunks[chunkIndex]];
-          const chunkSamples = this.audioProcessor.generateTone(frequency, 0.01, amplitude);
+          const chunkSamples = this.audioProcessor.generateTone(
+              frequency,
+              timing.chunkDuration / 1000,
+              amplitude);
           
           this.addSamples(encodedSamples, chunkSamples, sampleOffset);
           sampleOffset += chunkSamples.length;
         }
+          // Add column gap if configured
+          if (timing.columnGap > 0) {
+              sampleOffset += Math.floor(this.audioProcessor.sampleRate * (timing.columnGap / 1000));
+          }
       }
 
       // End marker
-      const endMarker = this.audioProcessor.generateTone(markers.end, 0.1, amplitude);
+      const endMarker = this.audioProcessor.generateTone(
+          markers.end,
+          timing.endMarker / 1000,
+          amplitude);
       this.addSamples(encodedSamples, endMarker, sampleOffset);
       sampleOffset += endMarker.length;
 
