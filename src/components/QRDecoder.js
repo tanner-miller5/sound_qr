@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { SoundQRDecoder } from '../utils/soundQRDecoder';
 import { AudioProcessor } from '../utils/audioUtils';
 import FileUpload from './FileUpload';
@@ -6,10 +6,14 @@ import FileUpload from './FileUpload';
 const QRDecoder = () => {
   const [audioFile, setAudioFile] = useState(null);
   const [decoding, setDecoding] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [progress, setProgress] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
+
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   const decoder = new SoundQRDecoder();
   const audioProcessor = new AudioProcessor();
@@ -277,51 +281,119 @@ const audioBufferToWav = async (audioBuffer) => {
   }
 };
 
-  const handleDecode = useCallback(async () => {
-    if (!audioFile) {
-      setError('Please select an audio file');
-      return;
-    }
+    const startRecording = useCallback(async () => {
+        setError(null);
+        setResult(null);
 
-    setDecoding(true);
-    setError(null);
-    setResult(null);
-    setDebugInfo(null);
-    setProgress('Loading audio file...');
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false, // Prevents volume pumping
+                    channelCount: 1
+                }
+            });
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
 
-    try {
-      const audioBuffer = await audioProcessor.loadAudioFile(audioFile);
-      
-      setProgress('Analyzing audio content...');
-      console.log('\n=== STARTING DECODE PROCESS ===');
-      
-      const decodingResult = await decoder.decode(audioBuffer, { 
-        fastMode: false,
-        maxProcessingTime: 60000 // 60 second timeout for debugging
-      });
-      
-      setResult(decodingResult);
-      setProgress('');
-      
-    } catch (err) {
-      console.error('Decoding error:', err);
-      setError(err.message);
-      setProgress('');
-    } finally {
-      setDecoding(false);
-    }
-  }, [audioFile]);
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+                // Create a File object from the Blob to reuse existing logic/state
+                const file = new File([audioBlob], "recording.webm", { type: 'audio/webm' });
+                setAudioFile(file);
+
+                // Auto-decode after recording
+                handleDecode(file);
+
+                // Stop all tracks to release microphone
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            mediaRecorder.start();
+            setIsRecording(true);
+            setProgress('Recording... (Speak or play sound now)');
+        } catch (err) {
+            console.error('Error accessing microphone:', err);
+            setError('Could not access microphone. Please ensure permissions are granted.');
+        }
+    }, []);
+
+    const stopRecording = useCallback(() => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+            setProgress('Processing recording...');
+        }
+    }, [isRecording]);
+
+    const handleDecode = useCallback(async (fileToDecode = null) => {
+        const targetFile = fileToDecode || audioFile;
+
+        if (!targetFile) return;
+
+        setDecoding(true);
+        setError(null);
+        setResult(null);
+        setProgress('Initializing audio...');
+
+        try {
+            await audioProcessor.initAudioContext();
+            setProgress('Loading audio data...');
+
+            const audioBuffer = await audioProcessor.loadAudioFile(targetFile);
+
+            setProgress('Analyzing audio (this may take a moment)...');
+
+            // Allow UI to update before heavy processing
+            setTimeout(async () => {
+                try {
+                    const decodeResult = await decoder.decode(audioBuffer);
+                    setResult(decodeResult);
+                    setProgress('');
+                } catch (decodeError) {
+                    setError(decodeError.message);
+                    setProgress('');
+                } finally {
+                    setDecoding(false);
+                }
+            }, 100);
+
+        } catch (err) {
+            setError(`Audio processing failed: ${err.message}`);
+            setDecoding(false);
+            setProgress('');
+        }
+    }, [audioFile]);
 
   return (
     <div className="qr-decoder">
       <h2>Decode QR from Audio</h2>
-      
-      <div className="form-group">
-        <FileUpload 
-          onFileSelect={setAudioFile}
-          label={audioFile ? audioFile.name : "Select Audio File"}
-        />
-      </div>
+
+        <div className="input-section">
+            <FileUpload
+                onFileSelect={setAudioFile}
+                label={audioFile ? `Selected: ${audioFile.name}` : "Select Audio File"}
+            />
+
+            <div className="divider">- OR -</div>
+
+            <button
+                onClick={isRecording ? stopRecording : startRecording}
+                className={`record-button ${isRecording ? 'recording' : ''}`}
+                disabled={decoding}
+            >
+                {isRecording ? '⏹ Stop Recording' : '🎙️ Record Audio'}
+            </button>
+        </div>
 
       <div className="button-group" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
         <button 
