@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { SoundQRDecoder } from '../utils/soundQRDecoder';
 import { AudioProcessor } from '../utils/audioUtils';
 import FileUpload from './FileUpload';
@@ -14,9 +14,26 @@ const QRDecoder = () => {
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const analysisIntervalRef = useRef(null); // Ref for the analysis timer
+  const isAnalyzingRef = useRef(false);     // Prevent overlapping analysis
 
   const decoder = new SoundQRDecoder();
   const audioProcessor = new AudioProcessor();
+
+    useEffect(() => {
+        return () => {
+            stopAnalysis();
+        };
+    }, []);
+
+    const stopAnalysis = () => {
+        if (analysisIntervalRef.current) {
+            clearInterval(analysisIntervalRef.current);
+            analysisIntervalRef.current = null;
+        }
+    };
+
+
 
   // Audio file inspector
   const inspectAudioFile = useCallback(async () => {
@@ -284,17 +301,21 @@ const audioBufferToWav = async (audioBuffer) => {
     const startRecording = useCallback(async () => {
         setError(null);
         setResult(null);
+        stopAnalysis(); // Ensure clear state
 
         try {
+            // Disable filters for clear high-freq recording
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: false,
                     noiseSuppression: false,
-                    autoGainControl: false, // Prevents volume pumping
+                    autoGainControl: false,
                     channelCount: 1
                 }
             });
-            const mediaRecorder = new MediaRecorder(stream);
+
+            // Request data every 500ms so we can analyze chunks in real-time
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
             mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
 
@@ -304,23 +325,55 @@ const audioBufferToWav = async (audioBuffer) => {
                 }
             };
 
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-
-                // Create a File object from the Blob to reuse existing logic/state
-                const file = new File([audioBlob], "recording.webm", { type: 'audio/webm' });
-                setAudioFile(file);
-
-                // Auto-decode after recording
-                handleDecode(file);
-
-                // Stop all tracks to release microphone
+            mediaRecorder.onstop = () => {
+                stopAnalysis();
                 stream.getTracks().forEach(track => track.stop());
+                setIsRecording(false);
             };
 
-            mediaRecorder.start();
+            mediaRecorder.start(500); // Timeslice 500ms to ensure dataavailable fires often
             setIsRecording(true);
-            setProgress('Recording... (Speak or play sound now)');
+            setProgress('Listening for QR code...');
+
+            // START REAL-TIME ANALYSIS LOOP
+            analysisIntervalRef.current = setInterval(async () => {
+                // Skip if already busy or not enough data (wait for ~2s of audio)
+                if (isAnalyzingRef.current || audioChunksRef.current.length < 4) return;
+
+                isAnalyzingRef.current = true;
+                try {
+                    // Create a snapshot blob from current chunks
+                    const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    const file = new File([blob], "temp_live.webm", { type: 'audio/webm' });
+
+                    // Quick load
+                    if (!audioProcessor.audioContext) await audioProcessor.initAudioContext();
+                    const arrayBuffer = await file.arrayBuffer();
+                    const audioBuffer = await audioProcessor.audioContext.decodeAudioData(arrayBuffer);
+
+                    // Attempt Decode
+                    // Only check the last 5 seconds to keep it fast
+                    const decodeResult = await decoder.decode(audioBuffer, {
+                        fastMode: true,
+                        maxProcessingTime: 1000 // Timeout fast
+                    });
+
+                    if (decodeResult) {
+                        // SUCCESS! Stop everything.
+                        console.log('✅ QR Code found during live recording!');
+                        mediaRecorder.stop(); // This triggers onstop
+                        setResult(decodeResult);
+                        setAudioFile(file); // Save the file that worked
+                        setProgress('QR Code Detected!');
+                    }
+                } catch (e) {
+                    // Ignore failures during live scan, just keep recording
+                    // console.debug('Live scan pass failed:', e.message);
+                } finally {
+                    isAnalyzingRef.current = false;
+                }
+            }, 1000); // Check every 1 second
+
         } catch (err) {
             console.error('Error accessing microphone:', err);
             setError('Could not access microphone. Please ensure permissions are granted.');
@@ -329,12 +382,14 @@ const audioBufferToWav = async (audioBuffer) => {
 
     const stopRecording = useCallback(() => {
         if (mediaRecorderRef.current && isRecording) {
+            stopAnalysis();
             mediaRecorderRef.current.stop();
-            setIsRecording(false);
-            setProgress('Processing recording...');
+            // Allow manual stop to trigger a final full decode attempt (via onstop logic if desired)
+            // For now, we rely on the realtime analysis or the user clicking "Decode" on the file.
+            setProgress('Recording stopped.');
         }
     }, [isRecording]);
-
+    
     const handleDecode = useCallback(async (fileToDecode = null) => {
         const targetFile = fileToDecode || audioFile;
 
