@@ -389,11 +389,17 @@ const audioBufferToWav = async (audioBuffer) => {
             setProgress('Recording stopped.');
         }
     }, [isRecording]);
-    
-    const handleDecode = useCallback(async (fileToDecode = null) => {
-        const targetFile = fileToDecode || audioFile;
 
-        if (!targetFile) return;
+// FIX: specific check to ensure fileToDecode is actually a File/Blob, not an Event
+    const handleDecode = useCallback(async (fileToDecode = null) => {
+        // Check if fileToDecode is a valid File or Blob (and not a React Event)
+        const isFile = fileToDecode instanceof Blob;
+        const targetFile = isFile ? fileToDecode : audioFile;
+
+        if (!targetFile) {
+            setError("No audio file selected.");
+            return;
+        }
 
         setDecoding(true);
         setError(null);
@@ -404,11 +410,11 @@ const audioBufferToWav = async (audioBuffer) => {
             await audioProcessor.initAudioContext();
             setProgress('Loading audio data...');
 
+            // Now targetFile is guaranteed to be a File object or Blob
             const audioBuffer = await audioProcessor.loadAudioFile(targetFile);
 
-            setProgress('Analyzing audio (this may take a moment)...');
+            setProgress('Analyzing audio...');
 
-            // Allow UI to update before heavy processing
             setTimeout(async () => {
                 try {
                     const decodeResult = await decoder.decode(audioBuffer);
@@ -423,6 +429,7 @@ const audioBufferToWav = async (audioBuffer) => {
             }, 100);
 
         } catch (err) {
+            console.error(err);
             setError(`Audio processing failed: ${err.message}`);
             setDecoding(false);
             setProgress('');
@@ -451,13 +458,13 @@ const audioBufferToWav = async (audioBuffer) => {
         </div>
 
       <div className="button-group" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-        <button 
-          onClick={handleDecode}
-          disabled={decoding || !audioFile}
-          className="decode-button"
-        >
-          {decoding ? 'Decoding...' : 'Decode QR from Audio'}
-        </button>
+          <button
+              onClick={() => handleDecode()}
+              disabled={decoding || !audioFile || isRecording}
+              className="decode-button"
+          >
+              {decoding ? 'Decoding...' : 'Decode Audio File'}
+          </button>
         
         <button 
           onClick={inspectAudioFile}
