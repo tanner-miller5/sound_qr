@@ -65,7 +65,7 @@ sound encoding, and decode them back from audio sources.
 2. **Chunk Division**: Split padded column into 6-bit chunks from top to bottom
 3. **Binary Conversion**: Convert each 6-bit chunk to decimal value (0-63)
 4. **Frequency Mapping**: Map decimal value to corresponding frequency in the fixed grid
-5. **Time Slot Assignment**: Each chunk gets 10ms time slot within the column's time period
+5. **Time Slot Assignment**: Each chunk gets 60ms time slot within the column's time period
 6. **Frequency Generation**: Emit the mapped frequency at -20dB amplitude during the chunk's time slot
 
 **Time Allocation per Complete QR Cycle:**
@@ -119,7 +119,7 @@ sound encoding, and decode them back from audio sources.
 - **Fixed Frequency Grid**: 64 center frequencies at 30 Hz intervals, each with ±10 Hz detection tolerance
 - **Frequency Buffer**: ±15 Hz separation buffer between adjacent data frequencies
 - **Chunk Size**: Fixed 6 bits (with zero-padding for shorter columns)
-- **Time per Chunk**: 10ms
+- **Time per Chunk**: 60ms
 - **QR Version Detection**: Start and end marker pair must match for valid cycle
 - **Frequency Detection Tolerance**: ±10 Hz (safe margin within 30 Hz spacing and 100+ Hz boundary separations)
 - **Amplitude Level**: Embedded frequencies at -20dB relative to original audio peak
@@ -175,7 +175,7 @@ sound encoding, and decode them back from audio sources.
    - Use 100ms sliding window increments to find potential cycle start points
    - Test each window position for presence of complete cycle structure
 7. For each valid cycle, determine number of 6-bit chunks per column based on confirmed version
-8. Process data between start and end markers: extract chunks sequentially in 10ms time slots
+8. Process data between start and end markers: extract chunks sequentially in 60ms time slots
 9. For each chunk, detect dominant frequency (±10 Hz tolerance) and map back to decimal value (0-63)
 10. Convert decimal values to 6-bit binary and concatenate chunks to reconstruct column
 11. Remove zero-padding bits from end based on QR version and validate padding bits are zeros

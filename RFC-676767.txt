@@ -216,7 +216,7 @@ Implementation MUST perform device assessment:
    - Calculate expected data duration from marker version
    - Verify matching end marker within timeframe
 4. **Data Extraction:**
-   - Process chunks in 10ms time slots
+   - Process chunks in 60ms time slots
    - Map frequencies to 6-bit values (±10 Hz tolerance)
    - Reconstruct columns with padding validation
 5. **Matrix Reconstruction:**

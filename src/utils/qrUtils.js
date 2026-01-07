@@ -133,7 +133,7 @@ export class QRProcessor {
 
         const startMarker = 100;      // 100ms start marker
         const endMarker = 100;        // 100ms end marker
-        const chunkDuration = 60;     // 10ms per chunk
+        const chunkDuration = 60;     // 60ms per chunk
         const columnGap = 0;          // No gap between columns
 
         // Calculate total chunks needed
