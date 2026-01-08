@@ -20,7 +20,7 @@ export class QRProcessor {
     const spec = this.getVersionSpec(version);
     console.log(`Generating QR for "${text}" (Version ${version})`);
     
-    try {
+
         // Import QRCode library
         const QRCode = (await import('qrcode')).default;
         
@@ -71,23 +71,6 @@ export class QRProcessor {
             version: version,
             text: text
         };
-        
-    } catch (error) {
-        console.error(`❌ QR generation failed: ${error.message}`);
-        
-        // Fallback: create a simple test matrix for debugging
-        console.log('Creating fallback test matrix...');
-        
-        const fallbackMatrix = this.createFallbackTestMatrix(spec.size, text);
-        
-        console.log(`Created ${spec.size}x${spec.size} test matrix for "${text}"`);
-        
-        return {
-            matrix: fallbackMatrix,
-            version: version,
-            text: text
-        };
-    }
   }
 
   createFallbackTestMatrix(size, text) {
