@@ -502,7 +502,7 @@ const audioBufferToWav = async (audioBuffer) => {
           <h3>Decoding Complete!</h3>
           <div className="decoded-result">
             <p><strong>QR Version:</strong> {result.version}</p>
-            <p><strong>Confidence:</strong> {(result.confidence * 100).toFixed(1)}%</p>
+            <p><strong>Confidence:</strong> {(Math.min(result.confidence * 100, 100)).toFixed(1)}%</p>
             <p><strong>Cycles Found:</strong> {result.cyclesFound}</p>
             <div className="decoded-data">
               <h4>Decoded Data:</h4>
