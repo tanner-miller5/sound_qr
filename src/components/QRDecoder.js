@@ -1,518 +1,343 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { SoundQRDecoder } from '../utils/soundQRDecoder';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import SoundQRDecoder from '../utils/soundQRDecoder';
 import { AudioProcessor } from '../utils/audioUtils';
 import FileUpload from './FileUpload';
 
 const QRDecoder = () => {
-  const [audioFile, setAudioFile] = useState(null);
-  const [decoding, setDecoding] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [progress, setProgress] = useState('');
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-  const [debugInfo, setDebugInfo] = useState(null);
+    const [audioFile, setAudioFile] = useState(null);
+    const [decoding, setDecoding] = useState(false);
+    const [isListening, setIsListening] = useState(false); // Shazam mode state
+    const [progress, setProgress] = useState('');
+    const [result, setResult] = useState(null);
+    const [error, setError] = useState(null);
+    const [micStats, setMicStats] = useState(null); // Live frequency stats
 
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const analysisIntervalRef = useRef(null); // Ref for the analysis timer
-  const isAnalyzingRef = useRef(false);     // Prevent overlapping analysis
+    // Persist instances
+    const decoder = useMemo(() => new SoundQRDecoder(), []);
+    const audioProcessor = useMemo(() => new AudioProcessor(), []);
 
-  const decoder = new SoundQRDecoder();
-  const audioProcessor = new AudioProcessor();
+    // Live Listening Refs
+    const audioContextRef = useRef(null);
+    const streamRef = useRef(null);
+    const processorRef = useRef(null);
+    const sourceRef = useRef(null);
+    const analyzerRef = useRef(null); // For frequency visual check
+    const isListeningRef = useRef(false);
 
+    // Rolling Buffer: Stores raw Float32 samples
+    const rollingBufferRef = useRef(new Float32Array(0));
+    const isProcessingRef = useRef(false);
+    const analysisTimerRef = useRef(null);
+
+    // Cleanup on unmount
     useEffect(() => {
         return () => {
-            stopAnalysis();
+            console.log('stopping')
+            stopListening();
+            if (audioContextRef.current) audioContextRef.current.close();
         };
     }, []);
 
-    const stopAnalysis = () => {
-        if (analysisIntervalRef.current) {
-            clearInterval(analysisIntervalRef.current);
-            analysisIntervalRef.current = null;
-        }
-    };
+    // --- SHAZAM / LIVE LISTEN FEATURE ---
 
-
-
-  // Audio file inspector
-  const inspectAudioFile = useCallback(async () => {
-  if (!audioFile) {
-    setError('Please select an audio file first');
-    return;
-  }
-
-  try {
-    await audioProcessor.initAudioContext();
-    const audioBuffer = await audioProcessor.loadAudioFile(audioFile);
-    
-    console.log('\n=== AUDIO FILE INSPECTION ===');
-    console.log(`File: ${audioFile.name}`);
-    console.log(`Size: ${audioFile.size} bytes`);
-    console.log(`Type: ${audioFile.type}`);
-    console.log(`Duration: ${audioBuffer.duration.toFixed(2)}s`);
-    console.log(`Sample Rate: ${audioBuffer.sampleRate}Hz`);
-    console.log(`Channels: ${audioBuffer.numberOfChannels}`);
-    
-    const channelData = audioBuffer.getChannelData(0);
-    
-    // Prevent stack overflow by processing in batches
-    const batchSize = 48000; // 1 second at 48kHz
-    let rmsSum = 0;
-    let peak = 0;
-    
-    for (let i = 0; i < channelData.length; i += batchSize) {
-      const end = Math.min(i + batchSize, channelData.length);
-      const batch = channelData.slice(i, end);
-      
-      // Calculate RMS for this batch
-      const batchRms = Math.sqrt(batch.reduce((sum, sample) => sum + sample * sample, 0) / batch.length);
-      rmsSum += batchRms * batchRms * batch.length;
-      
-      // Find peak in this batch
-      const batchPeak = Math.max(...batch.map(Math.abs));
-      peak = Math.max(peak, batchPeak);
-      
-      // Yield control periodically to prevent blocking
-      if (i % (batchSize * 5) === 0) {
-        await new Promise(resolve => setTimeout(resolve, 1));
-      }
-    }
-    
-    const rms = Math.sqrt(rmsSum / channelData.length);
-    
-    console.log(`RMS Level: ${rms.toFixed(6)} (${(20 * Math.log10(rms)).toFixed(1)} dB)`);
-    console.log(`Peak Level: ${peak.toFixed(6)} (${(20 * Math.log10(peak)).toFixed(1)} dB)`);
-    
-    // Simplified frequency analysis
-    console.log('\nFrequency Analysis:');
-    const expectedFreqs = [14000, 14100, 15200, 17090];
-    const testSegment = channelData.slice(0, Math.min(channelData.length, 9600)); // Max 200ms at 48kHz
-    
-    for (const freq of expectedFreqs) {
-      try {
-        // Simple correlation without recursion
-        let correlation = 0;
-        const samples = Math.min(testSegment.length, 4800); // Max 100ms
-        
-        for (let i = 0; i < samples; i++) {
-          const phase = 2 * Math.PI * freq * i / audioBuffer.sampleRate;
-          correlation += testSegment[i] * Math.sin(phase);
-        }
-        
-        correlation = Math.abs(correlation) / samples;
-        console.log(`${freq}Hz: correlation = ${correlation.toFixed(6)}`);
-        
-      } catch (err) {
-        console.log(`${freq}Hz: analysis failed - ${err.message}`);
-      }
-      
-      // Small delay to prevent blocking
-      await new Promise(resolve => setTimeout(resolve, 1));
-    }
-    
-    alert('Audio inspection complete. Check browser console for detailed analysis.');
-    
-  } catch (err) {
-    console.error('Inspection failed:', err);
-    setError(`Inspection failed: ${err.message}`);
-  }
-}, [audioFile]);
-
-// Simplified generateFullTestQR method with fixed RMS calculation
-const generateFullTestQR = useCallback(async () => {
-  try {
-    console.log('🚀 Starting test QR generation...');
-    
-    // Initialize audio context
-    await audioProcessor.initAudioContext();
-    const sampleRate = audioProcessor.sampleRate;
-    
-    // Create base audio buffer with quiet background noise
-    const duration = 20; // 20 seconds for Version 1 QR
-    const samples = new Float32Array(duration * sampleRate);
-    
-    // Add very quiet background noise to prevent complete silence
-    for (let i = 0; i < samples.length; i++) {
-      samples[i] = (Math.random() - 0.5) * 0.001; // Very quiet noise at -60dB
-    }
-    
-    const baseAudioBuffer = audioProcessor.audioContext.createBuffer(1, samples.length, sampleRate);
-    baseAudioBuffer.copyToChannel(samples, 0);
-    
-    console.log(`🔧 Created base audio: ${duration}s, ${sampleRate}Hz, ${samples.length} samples`);
-    
-    // Load encoder and set up mocking
-    const { SoundQREncoder } = await import('../utils/soundQREncoder');
-    const encoder = new SoundQREncoder();
-    await encoder.audioProcessor.initAudioContext();
-    
-    // Mock the loadAudioFile method
-    const originalLoad = encoder.audioProcessor.loadAudioFile;
-    encoder.audioProcessor.loadAudioFile = async () => {
-      console.log('🔧 Using mock audio buffer for encoding');
-      return baseAudioBuffer;
-    };
-    
-    console.log('🔧 Encoding "Hello World" as Version 1 QR...');
-    
-    const testFile = new File([new ArrayBuffer(1000)], 'test.wav', { type: 'audio/wav' });
-    const result = await encoder.encode(testFile, "Hello World", { 
-      version: 1, 
-      cycles: 3,
-      amplitude: 0.1
-    });
-    
-    // Restore original method
-    encoder.audioProcessor.loadAudioFile = originalLoad;
-    
-    console.log('✅ Encoding successful:', result);
-    
-    // FIXED: Verify the result has audio signal using batched processing
-    const resultChannelData = result.audioBuffer.getChannelData(0);
-    
-    // Calculate RMS in batches to prevent stack overflow
-    let rmsSum = 0;
-    let peak = 0;
-    const batchSize = 10000; // 10k samples per batch
-    
-    console.log(`🔧 Verifying result audio: ${resultChannelData.length} samples...`);
-    
-    for (let i = 0; i < resultChannelData.length; i += batchSize) {
-      const endIdx = Math.min(i + batchSize, resultChannelData.length);
-      
-      // Process batch for RMS
-      let batchSum = 0;
-      for (let j = i; j < endIdx; j++) {
-        const sample = resultChannelData[j];
-        batchSum += sample * sample;
-        const absSample = Math.abs(sample);
-        if (absSample > peak) peak = absSample;
-      }
-      rmsSum += batchSum;
-      
-      // Yield occasionally
-      if (i % (batchSize * 5) === 0) {
-        await new Promise(resolve => setTimeout(resolve, 1));
-      }
-    }
-    
-    const resultRMS = Math.sqrt(rmsSum / resultChannelData.length);
-    
-    console.log(`🔍 Result verification - RMS: ${resultRMS.toFixed(6)}, Peak: ${peak.toFixed(6)}`);
-    
-    if (resultRMS === 0 || peak === 0) {
-      throw new Error('Generated audio is silent - encoding failed');
-    }
-    
-    // Convert to WAV with improved method
-    console.log('🔧 Converting to downloadable WAV file...');
-    const wav = await audioBufferToWav(result.audioBuffer);
-    const blob = new Blob([wav], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    
-    // Download the file
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'test-hello-world-sound-qr.wav';
-    a.click();
-    
-    console.log('🎉 Test QR file generated successfully!');
-    alert('✅ Test QR file generated and downloaded successfully!\n\n' +
-          `File: test-hello-world-sound-qr.wav\n` +
-          `Duration: ${result.audioBuffer.duration.toFixed(2)}s\n` +
-          `QR Data: "Hello World"\n` +
-          `Version: ${result.qrData.version}\n` +
-          `Cycles: ${result.cycles}\n\n` +
-          'Check your Downloads folder and try decoding this file!');
-    
-  } catch (err) {
-    console.error('❌ Test generation failed:', err);
-    setError(`Test generation failed: ${err.message}`);
-    alert(`❌ Test generation failed: ${err.message}\n\nCheck the browser console for details.`);
-  }
-}, [audioProcessor]);
-
-const audioBufferToWav = async (audioBuffer) => {
-  try {
-    console.log(`🔧 Converting audio buffer to WAV: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.numberOfChannels} channels`);
-    
-    const numberOfChannels = audioBuffer.numberOfChannels;
-    const length = audioBuffer.length * numberOfChannels * 2;
-    const buffer = new ArrayBuffer(44 + length);
-    const view = new DataView(buffer);
-    
-    // WAV header
-    const writeString = (offset, string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
-    };
-    
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + length, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, numberOfChannels, true);
-    view.setUint32(24, audioBuffer.sampleRate, true);
-    view.setUint32(28, audioBuffer.sampleRate * numberOfChannels * 2, true);
-    view.setUint16(32, numberOfChannels * 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, 'data');
-    view.setUint32(40, length, true);
-    
-    // FIXED: Process audio data in smaller batches to prevent stack overflow
-    let offset = 44;
-    const batchSize = 1000; // Process 1000 samples at a time
-    
-    console.log(`🔧 Processing ${audioBuffer.length} samples in batches of ${batchSize}...`);
-    
-    for (let i = 0; i < audioBuffer.length; i += batchSize) {
-      const endIdx = Math.min(i + batchSize, audioBuffer.length);
-      
-      // Process this batch
-      for (let sampleIdx = i; sampleIdx < endIdx; sampleIdx++) {
-        for (let channel = 0; channel < numberOfChannels; channel++) {
-          const channelData = audioBuffer.getChannelData(channel);
-          const sample = Math.max(-1, Math.min(1, channelData[sampleIdx]));
-          view.setInt16(offset, sample * 0x7FFF, true);
-          offset += 2;
-        }
-      }
-      
-      // Yield control every batch to prevent blocking
-      if (i % (batchSize * 10) === 0) {
-        await new Promise(resolve => setTimeout(resolve, 1));
-        console.log(`🔧 WAV conversion progress: ${((i / audioBuffer.length) * 100).toFixed(1)}%`);
-      }
-    }
-    
-    console.log(`✅ WAV conversion complete: ${buffer.byteLength} bytes`);
-    return buffer;
-    
-  } catch (error) {
-    console.error(`❌ WAV conversion failed: ${error.message}`);
-    throw new Error(`WAV conversion failed: ${error.message}`);
-  }
-};
-
-    const startRecording = useCallback(async () => {
-        setError(null);
-        setResult(null);
-        stopAnalysis(); // Ensure clear state
-
+    const startListening = async () => {
         try {
-            // Disable filters for clear high-freq recording
-            const stream = await navigator.mediaDevices.getUserMedia({
+            setIsListening(true);
+            isListeningRef.current = true;
+            setError(null);
+
+            // 1. Define Constraints (Try for "Perfect" first)
+            const idealConstraints = {
                 audio: {
-                    echoCancellation: false,
+                    sampleRate: { ideal: 96000 }, // removed 'min' to prevent crash
+                    channelCount: 1,
+                    echoCancellation: false,      // "please don't"
                     noiseSuppression: false,
                     autoGainControl: false,
-                    channelCount: 1
+                    googEchoCancellation: false,
+                    googAutoGainControl: false,
+                    googNoiseSuppression: false,
+                    googHighpassFilter: false
                 }
+            };
+
+            let stream;
+            try {
+                // Attempt 1: High Fidelity
+                stream = await navigator.mediaDevices.getUserMedia(idealConstraints);
+                console.log("✅ Microphone initialized with IDEAL settings");
+            } catch (err) {
+                // Attempt 2: Fallback (Standard settings) if Attempt 1 fails
+                console.warn("⚠️ High-Res Audio failed, falling back to standard config.", err.name);
+
+                // Basic constraints that every device supports
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false
+                    }
+                });
+            }
+
+            streamRef.current = stream;
+
+            // --- LOG ACTUAL SETTINGS ---
+            const track = stream.getAudioTracks()[0];
+            const settings = track.getSettings();
+            console.log("🎤 Final Mic Settings:", settings);
+
+            // 2. Initialize Audio Context with the *Actual* Sample Rate
+            // This fixes the pitch shift bug if the fallback runs at 48k
+            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: settings.sampleRate // Match the hardware
             });
 
-            // Request data every 500ms so we can analyze chunks in real-time
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
+            if (audioContextRef.current.state === 'suspended') {
+                await audioContextRef.current.resume();
+            }
 
-            mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                }
+            // 3. Create Audio Nodes
+            const source = audioContextRef.current.createMediaStreamSource(stream);
+            const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+
+            // 4. Handle Incoming Audio Data
+            processor.onaudioprocess = (e) => {
+                if (!isListeningRef.current) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+
+                // Efficiently append new data to the rolling buffer
+                const oldBuffer = rollingBufferRef.current;
+                const newBuffer = new Float32Array(oldBuffer.length + inputData.length);
+
+                newBuffer.set(oldBuffer);
+                newBuffer.set(inputData, oldBuffer.length);
+
+                rollingBufferRef.current = newBuffer;
             };
 
-            mediaRecorder.onstop = () => {
-                stopAnalysis();
-                stream.getTracks().forEach(track => track.stop());
-                setIsRecording(false);
-            };
+            // 5. Connect the Graph
+            source.connect(processor);
+            processor.connect(audioContextRef.current.destination); // Required for script processor to run
 
-            mediaRecorder.start(500); // Timeslice 500ms to ensure dataavailable fires often
-            setIsRecording(true);
-            setProgress('Listening for QR code...');
+            // Store refs for cleanup
+            sourceRef.current = source;
+            processorRef.current = processor;
 
-            // START REAL-TIME ANALYSIS LOOP
-            analysisIntervalRef.current = setInterval(async () => {
-                // Skip if already busy or not enough data (wait for ~2s of audio)
-                if (isAnalyzingRef.current || audioChunksRef.current.length < 4) return;
-
-                isAnalyzingRef.current = true;
-                try {
-                    // Create a snapshot blob from current chunks
-                    const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                    const file = new File([blob], "temp_live.webm", { type: 'audio/webm' });
-
-                    // Quick load
-                    if (!audioProcessor.audioContext) await audioProcessor.initAudioContext();
-                    const arrayBuffer = await file.arrayBuffer();
-                    const audioBuffer = await audioProcessor.audioContext.decodeAudioData(arrayBuffer);
-
-                    // Attempt Decode
-                    // Only check the last 5 seconds to keep it fast
-                    const decodeResult = await decoder.decode(audioBuffer, {
-                        fastMode: true,
-                        maxProcessingTime: 1000 // Timeout fast
-                    });
-
-                    if (decodeResult) {
-                        // SUCCESS! Stop everything.
-                        console.log('✅ QR Code found during live recording!');
-                        mediaRecorder.stop(); // This triggers onstop
-                        setResult(decodeResult);
-                        setAudioFile(file); // Save the file that worked
-                        setProgress('QR Code Detected!');
-                    }
-                } catch (e) {
-                    // Ignore failures during live scan, just keep recording
-                    // console.debug('Live scan pass failed:', e.message);
-                } finally {
-                    isAnalyzingRef.current = false;
-                }
-            }, 1000); // Check every 1 second
-
-        } catch (err) {
-            console.error('Error accessing microphone:', err);
-            setError('Could not access microphone. Please ensure permissions are granted.');
-        }
-    }, []);
-
-    const stopRecording = useCallback(() => {
-        if (mediaRecorderRef.current && isRecording) {
-            stopAnalysis();
-            mediaRecorderRef.current.stop();
-            // Allow manual stop to trigger a final full decode attempt (via onstop logic if desired)
-            // For now, we rely on the realtime analysis or the user clicking "Decode" on the file.
-            setProgress('Recording stopped.');
-        }
-    }, [isRecording]);
-
-// FIX: specific check to ensure fileToDecode is actually a File/Blob, not an Event
-    const handleDecode = useCallback(async (fileToDecode = null) => {
-        // Check if fileToDecode is a valid File or Blob (and not a React Event)
-        const isFile = fileToDecode instanceof Blob;
-        const targetFile = isFile ? fileToDecode : audioFile;
-
-        if (!targetFile) {
-            setError("No audio file selected.");
-            return;
-        }
-
-        setDecoding(true);
-        setError(null);
-        setResult(null);
-        setProgress('Initializing audio...');
-
-        try {
-            await audioProcessor.initAudioContext();
-            setProgress('Loading audio data...');
-
-            // Now targetFile is guaranteed to be a File object or Blob
-            const audioBuffer = await audioProcessor.loadAudioFile(targetFile);
-
-            setProgress('Analyzing audio...');
-
-            setTimeout(async () => {
-                try {
-                    const decodeResult = await decoder.decode(audioBuffer);
-                    setResult(decodeResult);
-                    setProgress('');
-                } catch (decodeError) {
-                    setError(decodeError.message);
-                    setProgress('');
-                } finally {
-                    setDecoding(false);
+            // 6. Start the Analysis Loop
+            // We check the buffer every 100ms to see if we have enough data to decode
+            analysisTimerRef.current = setInterval(() => {
+                if (!isProcessingRef.current) {
+                    analyzeRollingBuffer();
                 }
             }, 100);
+        } catch (err) {
+            console.error("Mic initialization failed completely:", err);
+            setError("Could not access microphone. Please check permissions.");
+            setIsListening(false);
+        }
+    };
+
+    const stopListening = () => {
+        isListeningRef.current = false;
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(t => t.stop());
+        }
+        if (processorRef.current) {
+            processorRef.current.disconnect();
+            processorRef.current.onaudioprocess = null;
+        }
+        if (sourceRef.current) {
+            sourceRef.current.disconnect();
+        }
+        if (analysisTimerRef.current) {
+            clearInterval(analysisTimerRef.current);
+        }
+        setIsListening(false);
+        isProcessingRef.current = false;
+    };
+
+    const analyzeRollingBuffer = async () => {
+        // Prevent memory crash: Drop old data if buffer is > 10 seconds
+        const MAX_SAMPLES = audioContextRef.current.sampleRate * 10;
+        if (rollingBufferRef.current.length > MAX_SAMPLES) {
+            // Keep only the last 5 seconds
+            const keepAmount = audioContextRef.current.sampleRate * 5;
+            rollingBufferRef.current = rollingBufferRef.current.slice(-keepAmount);
+        }
+        if (isProcessingRef.current || !audioContextRef.current) return;
+        // Check buffer length (need at least ~5 seconds for V1 cycle)
+        const minSamples = (audioContextRef.current.sampleRate || 48000) * 4;
+        if (rollingBufferRef.current.length < minSamples) {
+            setProgress(`Buffering... (${(rollingBufferRef.current.length / audioContextRef.current.sampleRate).toFixed(1)}s)`);
+            return;
+        }
+        isProcessingRef.current = true;
+        setProgress('Analyzing buffer window...');
+
+        try {
+            // Create an AudioBuffer from the raw floats
+            const rawData = rollingBufferRef.current;
+            const tempBuffer = audioContextRef.current.createBuffer(1, rawData.length, audioContextRef.current.sampleRate);
+            tempBuffer.getChannelData(0).set(rawData);
+            console.log(`📉 Buffer Mismatch Check: Recording at ${audioContextRef.current.sampleRate}Hz vs Hardcoded 96000Hz`);
+            // Run Decoder
+            const decodeResult = await decoder.decode(tempBuffer, {
+                maxProcessingTime: 1500, // Fail fast to keep UI responsive
+                isLive: true
+            });
+
+            if (decodeResult) {
+                // SUCCESS!
+                setResult({
+                    version: decodeResult.version,
+                    cyclesFound: decodeResult.cyclesFound,
+                    data: decodeResult.data,
+                    confidence: decodeResult.confidence
+                });
+                stopListening(); // Stop immediately on success
+                setProgress('Code found!');
+                // Play success sound?
+            }
 
         } catch (err) {
-            console.error(err);
-            setError(`Audio processing failed: ${err.message}`);
-            setDecoding(false);
-            setProgress('');
+            // Expected error: "No cycles found"
+            // We just ignore it and keep listening
+
+            // Update Mic Stats for debug
+            if (err.maxFreqDetected) {
+                setMicStats(`Max Freq Detected: ${Math.round(err.maxFreqDetected)}Hz (Needs >21000Hz)`);
+            }
+            setProgress('Scanning... (Hold device steady)');
+        } finally {
+            isProcessingRef.current = false;
         }
-    }, [audioFile]);
+    };
 
-  return (
-    <div className="qr-decoder">
-      <h2>Decode QR from Audio</h2>
+    // --- FILE HANDLING ---
+    const handleFileSelect = (file) => {
+        setAudioFile(file);
+        setError(null);
+        setResult(null);
+        setProgress('File loaded. Ready to decode.');
+    };
 
-        <div className="input-section">
-            <FileUpload
-                onFileSelect={setAudioFile}
-                label={audioFile ? `Selected: ${audioFile.name}` : "Select Audio File"}
-            />
+    const decodeFile = async () => {
+        if (!audioFile) return;
+        setDecoding(true);
+        setProgress('Analyzing file...');
+        try {
+            const buffer = await audioProcessor.loadAudioFile(audioFile);
+            const res = await decoder.decode(buffer, { maxProcessingTime: 60000 });
+            setResult(res);
+            setProgress('Success!');
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setDecoding(false);
+        }
+    };
 
-            <div className="divider">- OR -</div>
+    return (
+        <div className="qr-decoder-container" style={{ maxWidth: '600px', margin: '0 auto', padding: '20px' }}>
+            <h2 style={{borderBottom: '2px solid #333', paddingBottom: '10px'}}>Sound-QR Receiver</h2>
 
-            <button
-                onClick={isRecording ? stopRecording : startRecording}
-                className={`record-button ${isRecording ? 'recording' : ''}`}
-                disabled={decoding}
-            >
-                {isRecording ? '⏹ Stop Recording' : '🎙️ Record Audio'}
-            </button>
-        </div>
+            {/* Mode Switcher / Input */}
+            <div className="input-section" style={{marginBottom: '20px'}}>
 
-      <div className="button-group" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button
-              onClick={() => handleDecode()}
-              disabled={decoding || !audioFile || isRecording}
-              className="decode-button"
-          >
-              {decoding ? 'Decoding...' : 'Decode Audio File'}
-          </button>
-        
-        <button 
-          onClick={inspectAudioFile}
-          disabled={!audioFile}
-          className="test-button"
-          style={{ background: '#666' }}
-        >
-          Inspect Audio File
-        </button>
-        
-        <button 
-          onClick={generateFullTestQR}
-          className="test-button"
-          style={{ background: '#4a4' }}
-        >
-          Generate Test QR
-        </button>
-      </div>
+                {/* SHAZAM BUTTON */}
+                <button
+                    onClick={isListening ? stopListening : startListening}
+                    className={`record-button ${isListening ? 'pulse-animation' : ''}`}
+                    disabled={decoding}
+                    style={{
+                        backgroundColor: isListening ? '#ff4757' : '#2ed573',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '50px',
+                        width: '80px',
+                        height: '80px',
+                        fontSize: '24px',
+                        display: 'block',
+                        margin: '20px auto',
+                        cursor: 'pointer',
+                        boxShadow: isListening ? '0 0 15px #ff4757' : '0 4px 6px rgba(0,0,0,0.1)'
+                    }}
+                >
+                    {isListening ? '■' : '🎤'}
+                </button>
+                <div style={{textAlign: 'center', marginBottom: '20px', color: '#aaa'}}>
+                    {isListening ? 'Listening...' : 'Tap to Listen'}
+                </div>
 
-      {progress && (
-        <div className="progress-message">
-          {progress}
-        </div>
-      )}
+                <div className="divider" style={{textAlign: 'center', color: '#555', margin: '20px 0'}}>— OR —</div>
 
-      {error && (
-        <div className="error-message">
-          <h4>Error: {error}</h4>
-          <p>Check the browser console for detailed analysis logs.</p>
-        </div>
-      )}
+                <FileUpload
+                    onFileSelect={handleFileSelect}
+                    accept="audio/*,.ui67"
+                    label={audioFile ? audioFile.name : "Select Audio File"}
+                />
 
-      {result && (
-        <div className="result-section">
-          <h3>Decoding Complete!</h3>
-          <div className="decoded-result">
-            <p><strong>QR Version:</strong> {result.version}</p>
-            <p><strong>Confidence:</strong> {(Math.min(result.confidence * 100, 100)).toFixed(1)}%</p>
-            <p><strong>Cycles Found:</strong> {result.cyclesFound}</p>
-            <div className="decoded-data">
-              <h4>Decoded Data:</h4>
-              <pre>{result.data}</pre>
+                <button
+                    onClick={decodeFile}
+                    disabled={!audioFile || decoding || isListening}
+                    style={{
+                        width: '100%',
+                        padding: '10px',
+                        marginTop: '10px',
+                        background: '#3742fa',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        opacity: (!audioFile || decoding) ? 0.5 : 1
+                    }}
+                >
+                    {decoding ? 'Processing...' : 'Decode File'}
+                </button>
             </div>
-          </div>
+
+            {/* STATUS DISPLAY */}
+            <div className="status-display" style={{ minHeight: '60px' }}>
+                {progress && <div style={{ color: '#eccc68', textAlign: 'center' }}>{progress}</div>}
+                {micStats && isListening && (
+                    <div style={{ fontSize: '0.8em', color: '#777', textAlign: 'center', marginTop: '5px' }}>
+                        DEBUG: {micStats}
+                    </div>
+                )}
+                {error && (
+                    <div style={{ background: 'rgba(255,0,0,0.1)', color: '#ff6b6b', padding: '10px', borderRadius: '4px', marginTop: '10px' }}>
+                        {error}
+                    </div>
+                )}
+            </div>
+
+            {/* RESULT CARD */}
+            {result && (
+                <div className="result-card" style={{ marginTop: '20px', padding: '20px', background: '#2f3542', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
+                    <h3 style={{ color: '#2ed573', marginTop: 0 }}>Decoded Successfully</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.9em', color: '#ccc' }}>
+                        <div>Version: {result.version}</div>
+                        <div>Confidence: {(result.confidence * 100).toFixed(0)}%</div>
+                    </div>
+                    <div style={{ background: '#000', padding: '15px', marginTop: '15px', borderRadius: '4px', fontFamily: 'monospace', fontSize: '1.2em', wordBreak: 'break-all' }}>
+                        {result.data}
+                    </div>
+                </div>
+            )}
+
+            <style>{`
+        .pulse-animation {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 71, 87, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(255, 71, 87, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 71, 87, 0); }
+        }
+      `}</style>
         </div>
-      )}
-    </div>
-  );
+    );
 };
 
 export default QRDecoder;

@@ -1,218 +1,159 @@
 import { AudioProcessor } from './audioUtils';
 import { QRProcessor } from './qrUtils';
 
-export class SoundQRDecoder {
+class SoundQRDecoder {
   constructor() {
     this.audioProcessor = new AudioProcessor();
     this.qrProcessor = new QRProcessor();
   }
 
-  async decode(audioBuffer, options = {}) {
-    const {
-      deviceCapability = 'full',
-      fastMode = true,
-      maxProcessingTime = 30000 // 30 second timeout
-    } = options;
-
-    const startTime = Date.now();
-    
-    try {
-      await this.audioProcessor.initAudioContext();
-
-      const versionPriorities = [1, 2, 3, 4, 5]; // Start with version 1 first
-      
-      console.log('Starting cycle detection...');
-      const validCycles = await this.detectValidCycles(audioBuffer, versionPriorities);
-      
-      if (Date.now() - startTime > maxProcessingTime) {
-        throw new Error('Processing timeout - operation took too long');
-      }
-      
-      if (validCycles.length === 0) {
-        throw new Error('No valid QR cycles detected');
-      }
-
-      console.log(`Found ${validCycles.length} cycles, attempting decode...`);
-      
-      // Try each cycle until one succeeds
-      for (let i = 0; i < Math.min(validCycles.length, 3); i++) {
-        const cycle = validCycles[i];
-        console.log(`Attempting cycle ${i + 1}: Version ${cycle.version}, confidence: ${(cycle.confidence * 100).toFixed(1)}%`);
-        
+    async decode(audioBuffer, options = {}) {
+        const { maxProcessingTime = 30000, isLive = false } = options;
         try {
-          const decodedData = await this.decodeCycle(audioBuffer, cycle);
-          
-          if (decodedData) {
-            return {
-              data: decodedData,
-              version: cycle.version,
-              confidence: cycle.confidence,
-              cyclesFound: validCycles.length
-            };
-          }
-        } catch (cycleError) {
-          console.warn(`Cycle ${i + 1} failed: ${cycleError.message}`);
-          continue; // Try next cycle
-        }
-      }
-      
-      throw new Error('All cycles failed decoding');
-      
-    } catch (error) {
-      const processingTime = Date.now() - startTime;
-      console.error(`Decoding failed after ${processingTime}ms: ${error.message}`);
-      throw new Error(`Decoding failed: ${error.message}`);
-    }
-  }
+            await this.audioProcessor.initAudioContext();
+            const config = this.audioProcessor.getFrequencyConfig();
 
-  // Much more aggressive detection approach
-  async detectValidCycles(audioBuffer, versionPriorities) {
-    const channelData = audioBuffer.getChannelData(0);
-    const sampleRate = audioBuffer.sampleRate;
-    
-    // Debug boundary markers
-    console.log('🔧 Debugging boundary markers:');
-    const boundaryMarkers = this.audioProcessor.getBoundaryMarkers();
-    for (let v = 1; v <= 5; v++) {
-      const marker = boundaryMarkers[v];
-      console.log(`  Version ${v}: Start ${marker.start}Hz, End ${marker.end}Hz`);
-    }
-    
-    // Calculate RMS and peak for threshold
-    console.log('\n=== OPTIMIZED AUDIO ANALYSIS ===');
-    console.log(`Duration: ${audioBuffer.duration.toFixed(2)}s`);
-    console.log(`Sample Rate: ${sampleRate}Hz`);
-    console.log(`Samples: ${channelData.length}`);
-    
-    let rmsSum = 0;
-    let peak = 0;
-    const batchSize = 50000;
-    
-    for (let i = 0; i < channelData.length; i += batchSize) {
-      const end = Math.min(i + batchSize, channelData.length);
-      let batchSum = 0;
-      
-      for (let j = i; j < end; j++) {
-        const sample = channelData[j];
-        batchSum += sample * sample;
-        peak = Math.max(peak, Math.abs(sample));
-      }
-      rmsSum += batchSum;
-    }
-    
-    const rms = Math.sqrt(rmsSum / channelData.length);
-    console.log(`Peak Amplitude: ${peak.toFixed(6)}`);
-    console.log(`RMS: ${rms.toFixed(6)}`);
-    
-    // Frequency analysis to verify signal presence
-    console.log('\n=== FREQUENCY ANALYSIS ===');
-    const testFreqs = [14000, 14100, 14500, 15200, 16000, 17090];
-    const testSegment = channelData.slice(0, Math.min(channelData.length, 48000)); // First second
-    
-    const frequencyStrengths = {};
-    for (const freq of testFreqs) {
-      const strength = this.calculateFrequencyStrength(testSegment, freq, sampleRate);
-      frequencyStrengths[freq] = strength;
-      console.log(`${freq}Hz: ${strength.toFixed(6)}`);
-    }
-    
-    // Analyze boundary markers for each version
-    const markerAnalysis = {};
-    for (let version = 1; version <= 5; version++) {
-      const markers = boundaryMarkers[version];
-      const startStrength = frequencyStrengths[markers.start] || 0;
-      const endStrength = frequencyStrengths[markers.end] || 0;
-      
-      markerAnalysis[version] = {
-        startStrength,
-        endStrength,
-        totalStrength: startStrength + endStrength
-      };
-    }
-    
-    console.log('🔧 Boundary markers:', markerAnalysis);
-    
-    // MUCH MORE AGGRESSIVE THRESHOLD - use the actual observed signal levels
-    const maxObservedStrength = Math.max(...Object.values(frequencyStrengths));
-    const minDetectionThreshold = Math.max(
-      maxObservedStrength * 0.05,  // 5% of max observed
-      rms * 0.05,                  // 5% of RMS
-      0.000001                    // Absolute minimum threshold
-    );
-    
-    console.log(`📊 Max observed frequency strength: ${maxObservedStrength.toFixed(6)}`);
-    console.log(`📊 Using AGGRESSIVE detection threshold: ${minDetectionThreshold.toFixed(6)}`);
-    
-    // Scan for cycles with much smaller windows and steps
-    const windowSize = Math.floor(sampleRate * 0.05); // 50ms windows (smaller)
-    const stepSize = Math.floor(windowSize * 0.5); // 50% overlap
-    const maxWindows = Math.floor((channelData.length - windowSize) / stepSize);
-    
-    console.log(`Starting focused scan: ${maxWindows} windows, ${windowSize} samples per window, ${stepSize} step size`);
-    
-    const validCycles = [];
-    
-    // Scan the entire audio file
-    for (let windowIndex = 0; windowIndex < maxWindows; windowIndex++) {
-      const startSample = windowIndex * stepSize;
-      const windowData = channelData.slice(startSample, startSample + windowSize);
-      
-      // Test each version priority
-      for (const version of versionPriorities) {
-        const markers = boundaryMarkers[version];
-        
-        // Look for start marker with much lower threshold
-        const startMarkerStrength = this.calculateFrequencyStrength(windowData, markers.start, sampleRate);
-        
-        if (startMarkerStrength > minDetectionThreshold) {
-          console.log(`🔍 Found potential start marker: Version ${version}, strength ${startMarkerStrength.toFixed(6)}, time ${(startSample / sampleRate).toFixed(2)}s`);
-          
-          // Look for cycle with more comprehensive analysis
-          const cycleResult = await this.analyzeCycleExtensive(
-            channelData, 
-            startSample, 
-            version, 
-            sampleRate,
-            minDetectionThreshold
-          );
-          
-          if (cycleResult && cycleResult.confidence > 0.001) { // 0.1% confidence minimum
-            console.log(`✅ Found valid cycle: Version ${version}, confidence ${(cycleResult.confidence * 100).toFixed(2)}%, start: ${(startSample / sampleRate).toFixed(2)}s`);
-            validCycles.push({
-              ...cycleResult,
-              version: version,
-              startSample: startSample,
-              startTime: startSample / sampleRate
-            });
-          }
+            // 1. Detect Cycles
+            const detectionResult = await this.detectValidCycles(audioBuffer, config);
+
+            let validCycles = [];
+            let maxFreq = 0;
+
+            if (Array.isArray(detectionResult)) {
+                validCycles = detectionResult;
+            } else if (detectionResult && Array.isArray(detectionResult.cycles)) {
+                validCycles = detectionResult.cycles;
+                maxFreq = detectionResult.maxFreq;
+            }
+
+            if (validCycles.length === 0) {
+                const err = new Error('No valid Sound-QR cycles detected.');
+                err.maxFreqDetected = maxFreq;
+                throw err;
+            }
+
+            if (!isLive) console.log(`Found ${validCycles.length} potential cycles. Decoding...`);
+
+            // 2. Decode Cycles
+            for (const cycle of validCycles) {
+                // Refine Alignment
+                const preciseStartTime = this.refineCycleAlignment(audioBuffer, cycle, config);
+
+                if (!isLive) {
+                    console.log(`Processing Cycle: Version ${cycle.version} at ${cycle.startTime.toFixed(3)}s`);
+                    console.log(`  -> Alignment: ${cycle.startTime.toFixed(4)}s => ${preciseStartTime.toFixed(4)}s`);
+                }
+
+                // Decode
+                const result = await this.decodeCycle(audioBuffer, { ...cycle, startTime: preciseStartTime }, config);
+
+                if (result) {
+                    return {
+                        ...result,
+                        cyclesFound: validCycles.length
+                    };
+                }
+            }
+
+            throw new Error('Cycles found but decoding failed.');
+
+        } catch (error) {
+            if (!isLive) console.error(error);
+            throw error;
         }
-      }
-      
-      // Progress indicator
-      if (windowIndex % 50 === 0 && windowIndex > 0) {
-        console.log(`Scan progress: ${windowIndex}/${maxWindows} (${(windowIndex/maxWindows*100).toFixed(1)}%)`);
-      }
     }
-    
-    // Sort by confidence and filter
-    validCycles.sort((a, b) => b.confidence - a.confidence);
-    
-    console.log('\n=== SCAN RESULTS ===');
-    console.log(`Scanned ${maxWindows} windows`);
-    console.log(`Found ${validCycles.length} potential cycles`);
-    
-    // Much more lenient filtering
-    const filteredCycles = validCycles.filter(c => c.confidence > 0.0001); // 0.01% minimum
-    console.log(`After filtering: ${filteredCycles.length} cycles above 0.01% confidence`);
-    
-    // If we still haven't found anything, try an even more aggressive approach
-    if (filteredCycles.length === 0) {
-      console.log('🚨 No cycles found with standard approach, trying emergency detection...');
-      return await this.emergencyDetection(channelData, sampleRate, versionPriorities);
+
+    async detectValidCycles(audioBuffer, config) {
+        const data = audioBuffer.getChannelData(0);
+        const sr = audioBuffer.sampleRate;
+        const cycles = [];
+        const windowSize = Math.floor(sr * 0.1); // 100ms
+        const step = Math.floor(windowSize / 2);
+
+        let globalMaxEnergy = 0;
+        let maxFreqFound = 0;
+
+        // 1. Quick noise floor scan
+        const scanStep = Math.floor(sr * 0.5);
+        for (let i = 0; i < data.length - windowSize; i += scanStep) {
+            const chunk = data.slice(i, i + windowSize);
+            const e1 = this.calculateFrequencyStrength(chunk, config.markers.versionStart[1], sr);
+
+            if (e1 > globalMaxEnergy) globalMaxEnergy = e1;
+            if (e1 > 0.001) maxFreqFound = Math.max(maxFreqFound, config.markers.versionStart[1]);
+        }
+
+        //const threshold = Math.max(0.005, globalMaxEnergy * 0.3); // Lower threshold slightly
+        const threshold = config?.isLive ? 0.002 : 0.005; // Use 0.002 for live mic
+        // 2. Detailed Scan
+        for (let i = 0; i < data.length - windowSize; i += step) {
+            const windowData = data.slice(i, i + windowSize);
+
+            for (let v = 1; v <= 5; v++) {
+                const markerFreq = config.markers.versionStart[v];
+                const energy = this.calculateFrequencyStrength(windowData, markerFreq, sr);
+
+                if (energy > threshold) {
+                    const time = i / sr;
+                    if (!cycles.some(c => Math.abs(c.startTime - time) < 0.8)) {
+                        cycles.push({
+                            version: v,
+                            startTime: time,
+                            confidence: energy
+                        });
+                    }
+                }
+            }
+        }
+
+        return { cycles, maxFreq: maxFreqFound };
     }
-    
-    return filteredCycles.slice(0, 5); // Return top 5 candidates
-  }
+
+    refineCycleAlignment(audioBuffer, cycle, config) {
+        const sr = audioBuffer.sampleRate;
+        const data = audioBuffer.getChannelData(0);
+
+        // We initially found the start roughly. The marker is 100ms long.
+        // We want to center our read head such that we are in the middle of that 100ms block.
+        // Scan a wider range: -100ms to +100ms
+        const centerSample = Math.floor(cycle.startTime * sr);
+        const searchRange = Math.floor(sr * 0.1);
+        const startIdx = Math.max(0, centerSample - searchRange);
+        const endIdx = Math.min(data.length, centerSample + searchRange);
+
+        const markerFreq = config.markers.versionStart[cycle.version];
+        const windowLen = Math.floor(sr * 0.1); // 100ms window
+
+        let maxEnergy = -1;
+        let bestSampleIndex = centerSample;
+
+        // Coarse scan first
+        const coarseStep = Math.floor(sr * 0.005); // 5ms
+        for (let i = startIdx; i < endIdx - windowLen; i += coarseStep) {
+            const chunk = data.slice(i, i + windowLen);
+            const energy = this.calculateFrequencyStrength(chunk, markerFreq, sr);
+            if (energy > maxEnergy) {
+                maxEnergy = energy;
+                bestSampleIndex = i;
+            }
+        }
+
+        // Fine scan around best coarse spot (+/- 10ms)
+        const fineRange = Math.floor(sr * 0.01);
+        const fineStart = Math.max(0, bestSampleIndex - fineRange);
+        const fineEnd = Math.min(data.length, bestSampleIndex + fineRange);
+
+        for (let i = fineStart; i < fineEnd; i += Math.floor(sr*0.001)) { // 1ms
+            const chunk = data.slice(i, i + windowLen);
+            const energy = this.calculateFrequencyStrength(chunk, markerFreq, sr);
+            if (energy > maxEnergy) {
+                maxEnergy = energy;
+                bestSampleIndex = i;
+            }
+        }
+
+        return bestSampleIndex / sr;
+    }
 
   // Emergency detection for very weak signals
   async emergencyDetection(channelData, sampleRate, versionPriorities) {
@@ -370,155 +311,103 @@ export class SoundQRDecoder {
     }
   }
 
-  // Improved frequency strength calculation
-  calculateFrequencyStrength(samples, frequency, sampleRate) {
-    if (!samples || samples.length === 0) return 0;
-    
-    try {
-      let sumSin = 0;
-      let sumCos = 0;
-      const omega = 2 * Math.PI * frequency / sampleRate;
-      const maxSamples = Math.min(samples.length, Math.floor(sampleRate * 0.02)); // 20ms max
-      
-      for (let i = 0; i < maxSamples; i++) {
-        const phase = omega * i;
-        sumSin += samples[i] * Math.sin(phase);
-        sumCos += samples[i] * Math.cos(phase);
-      }
-      
-      const magnitude = Math.sqrt(sumSin * sumSin + sumCos * sumCos) / maxSamples;
-      return magnitude;
-      
-    } catch (error) {
-      return 0;
-    }
-  }
+    calculateFrequencyStrength(samples, frequency, sampleRate) {
+        const k = 0.5 + ((samples.length * frequency) / sampleRate);
+        const omega = (2.0 * Math.PI * k) / samples.length;
+        const cosine = Math.cos(omega);
+        const coeff = 2.0 * cosine;
+        let q0 = 0, q1 = 0, q2 = 0;
 
-
-    // Fixed decodeCycle method with proper matrix reconstruction
-    async decodeCycle(audioBuffer, cycle) {
-        try {
-            console.log(`🔧 Decoding cycle: Version ${cycle.version}, confidence ${(cycle.confidence * 100).toFixed(2)}%`);
-
-            const channelData = audioBuffer.getChannelData(0);
-            const sampleRate = audioBuffer.sampleRate;
-            const version = cycle.version;
-            const startSample = cycle.startSample;
-
-            const timing = this.qrProcessor.getCycleTiming(version);
-            const spec = this.qrProcessor.getVersionSpec(version);
-            const frequencies = this.audioProcessor.getFrequencyGrid();
-
-            console.log(`🔧 Timing: ${JSON.stringify(timing)}`);
-            console.log(`🔧 Spec: size=${spec.size}, chunkSize=${spec.chunkSize}`);
-
-            // Extract cycle data with some padding
-            const expectedCycleSamples = Math.floor(sampleRate * timing.totalTime / 1000);
-            const endSample = Math.min(startSample + expectedCycleSamples, channelData.length);
-            const cycleData = channelData.slice(startSample, endSample);
-
-            // Skip start marker (first 100ms)
-            const startMarkerSamples = Math.floor(sampleRate * timing.startMarker / 1000);
-            let sampleOffset = startMarkerSamples;
-
-            const matrix = [];
-
-            // Initialize matrix
-            for (let row = 0; row < spec.size; row++) {
-                matrix[row] = new Array(spec.size).fill(0);
-            }
-
-            console.log(`🔧 Decoding ${spec.size}x${spec.size} matrix from cycle data...`);
-            console.log(`🔧 Expected cycle samples: ${expectedCycleSamples}, actual: ${cycleData.length}`);
-
-            // Decode each column
-            for (let col = 0; col < spec.size && sampleOffset < cycleData.length; col++) {
-                const chunks = [];
-
-                // Decode chunks for this column
-                const chunksPerColumn = Math.ceil(spec.size / spec.chunkSize);
-
-                for (let chunkIdx = 0; chunkIdx < chunksPerColumn; chunkIdx++) {
-                    if (sampleOffset >= cycleData.length) {
-                        console.warn(`⚠️ Ran out of data at column ${col}, chunk ${chunkIdx}`);
-                        break;
-                    }
-
-                    const chunkSamples = Math.floor(sampleRate * timing.chunkDuration / 1000);
-                    const chunkEnd = Math.min(sampleOffset + chunkSamples, cycleData.length);
-                    const chunkData = cycleData.slice(sampleOffset, chunkEnd);
-
-                    if (chunkData.length === 0) {
-                        console.warn(`⚠️ Empty chunk data at column ${col}, chunk ${chunkIdx}`);
-                        chunks.push(0);
-                        break;
-                    }
-
-                    // Find best matching frequency - improved method
-                    let bestFreqIdx = 0;
-                    let bestStrength = 0;
-                    const strengthThreshold = 0.000001; // Very low threshold
-
-                    for (let freqIdx = 0; freqIdx < frequencies.length; freqIdx++) {
-                        const strength = this.calculateFrequencyStrength(chunkData, frequencies[freqIdx], sampleRate);
-                        if (strength > bestStrength) {
-                            bestStrength = strength;
-                            bestFreqIdx = freqIdx;
-                        }
-                    }
-
-                    // Only use the frequency if it's above threshold, otherwise use 0
-                    const finalFreqIdx = bestStrength > strengthThreshold ? bestFreqIdx : 0;
-                    chunks.push(finalFreqIdx);
-
-                    sampleOffset += chunkSamples;
-
-                    // Add gap between chunks if specified
-                    if (timing.columnGap) {
-                        sampleOffset += Math.floor(sampleRate * timing.columnGap / 1000);
-                    }
-                }
-
-                if (col < 3) { // Debug first few columns
-                    console.log(`Column ${col}: chunks [${chunks.join(', ')}] (${chunks.length} chunks)`);
-                }
-
-                // FIXED: Convert chunks back to matrix column with proper bit mapping
-                this.chunksToMatrixColumn(chunks, matrix, col, spec);
-            }
-
-            console.log(`🔧 Reconstructed matrix: ${matrix.length}x${matrix[0]?.length || 0}`);
-            console.log(matrix)
-            // Enhanced matrix debugging
-            console.log('🔍 Matrix first 10x10:');
-            for (let i = 0; i < Math.min(10, matrix.length); i++) {
-                const row = matrix[i].slice(0, 10).map(v => v ? '█' : '·').join('');
-                console.log(`  ${i.toString().padStart(2)}: ${row}`);
-            }
-
-            // Try to decode the matrix
-            const decodedText = await this.qrProcessor.decodeQRMatrix(matrix);
-
-            if (decodedText) {
-                console.log(`✅ Successfully decoded: "${decodedText}"`);
-                return decodedText;
-            } else {
-                console.log(`❌ Matrix decode failed for version ${version}`);
-
-                // Try different interpretations of the same data
-                /*
-                const alternativeResults = await this.tryAlternativeDecodings(chunks, spec);
-                if (alternativeResults) {
-                    return alternativeResults;
-                }
-                */
-                return null;
-            }
-
-        } catch (error) {
-            console.warn(`Cycle decode error: ${error.message}`);
-            return null;
+        // Unrolled loop for slight perf boost if needed, but V8 handles this well
+        for (let i = 0; i < samples.length; i++) {
+            q0 = (coeff * q1) - q2 + samples[i];
+            q2 = q1;
+            q1 = q0;
         }
+
+        // Standard Goertzel magnitude
+        const magnitude = Math.sqrt(q1 * q1 + q2 * q2 - q1 * q2 * coeff) / samples.length;
+        // --- DEBUG LOGS START ---
+// Only log if we see *any* significant energy to avoid spamming console
+        if (magnitude > 0.0001) {
+            console.log(`🔍 Freq: ${frequency}Hz | Mag: ${magnitude.toFixed(5)}`);
+        }
+// --- DEBUG LOGS END ---
+        return magnitude
+    }
+
+    async decodeCycle(audioBuffer, cycle, config) {
+        const version = cycle.version;
+        const matrixSize = 21 + (version - 1) * 4;
+        const rows = matrixSize;
+        const cols = matrixSize;
+        const chunksPerCol = Math.ceil(rows / 6);
+        const chunkDuration = 0.060;
+        const markerDuration = 0.100;
+
+        let decodedMatrix = Array(rows).fill().map(() => Array(cols).fill(0));
+
+        // Offset: Move past the start marker
+        // We add a tiny buffer (5ms) to ensure we are fully inside the data block
+        let currentTime = cycle.startTime + markerDuration + 0.005;
+
+        const sampleRate = audioBuffer.sampleRate;
+        const data = audioBuffer.getChannelData(0);
+
+        const totalDurationNeeded = (cols * chunksPerCol * chunkDuration);
+        if (currentTime + totalDurationNeeded > audioBuffer.duration) return null;
+
+        for (let col = 0; col < cols; col++) {
+            let colBits = "";
+            for (let ch = 0; ch < chunksPerCol; ch++) {
+                // Read center 40ms of the 60ms chunk
+                const bufferSafety = 0.010;
+                const startSample = Math.floor((currentTime + bufferSafety) * sampleRate);
+                const endSample = Math.floor((currentTime + chunkDuration - bufferSafety) * sampleRate);
+                const chunkData = data.slice(startSample, endSample);
+
+                const detectedVal = this.detectChunkValue(chunkData, sampleRate, config);
+                const bin = detectedVal.toString(2).padStart(6, '0');
+                colBits += bin;
+                currentTime += chunkDuration;
+            }
+
+            for (let r = 0; r < rows; r++) {
+                // Protect against overflow if calculation is slightly off
+                if (r < colBits.length) {
+                    decodedMatrix[r][col] = parseInt(colBits[r], 10);
+                }
+            }
+        }
+
+        // VISUAL DEBUG: Print matrix to console
+        /*
+        const visual = decodedMatrix.map(row => row.map(b => b ? '██' : '  ').join('')).join('\n');
+        console.log(`\nReconstructed Matrix V${version}:\n` + visual);
+        */
+
+        return await this.qrProcessor.decodeMatrix(decodedMatrix, version);
+    }
+
+    detectChunkValue(samples, sampleRate, config) {
+        let maxEnergy = -1;
+        let bestValue = 0;
+
+        // Optimization: Check only the 64 bins
+        for (let val = 0; val < 64; val++) {
+            const targetFreq = config.dataStart + (val * config.step);
+            const energy = this.calculateFrequencyStrength(samples, targetFreq, sampleRate);
+
+            if (energy > maxEnergy) {
+                maxEnergy = energy;
+                bestValue = val;
+            }
+        }
+
+        // Noise Gate: If the strongest signal is still incredibly weak, it's probably 0 (or noise)
+        // But 0 is a valid value. In a real system we'd check SNR.
+        // For now, simple max winner takes all is the most robust strategy for low SNR.
+        return bestValue;
     }
 
     // FIXED: Proper chunk to matrix conversion
@@ -653,4 +542,8 @@ export class SoundQRDecoder {
         return [1, 2, 3, 4, 5];
     }
   }
+
+
 }
+
+export default SoundQRDecoder

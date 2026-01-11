@@ -1,0 +1,117 @@
+# Request for Comments: The UI67 Multimedia Container Format
+
+**RFC:** 0067
+
+**Title:** UI67 Multimedia Container Format
+
+**Status:** Proposal
+
+**Category:** Informational
+
+**Source:** Ultrasonic-in-67 Project
+
+## Abstract
+
+This document specifies the **UI67** file format, a specialized binary container designed to preserve high-frequency audio data (ultrasonic frequencies >20 kHz) often discarded by standard perceptual audio codecs. While standard formats like MP4/AAC impose "brick wall" low-pass filters around 16–18 kHz, UI67 facilitates the storage of full-spectrum audio (up to 48 kHz bandwidth and beyond) alongside video streams. This format is intended for applications in audio steganography, high-fidelity archival, and near-field data transmission.
+
+## 1. Introduction
+
+Standard multimedia containers and codecs are engineered for human perception. To minimize file size, psychoacoustic models remove data deemed "irrelevant," effectively erasing frequencies above the human hearing threshold.
+
+The UI67 format addresses the need for a container that prioritizes **data integrity** over perceptual compression. By supporting high sample rates (e.g., 96 kHz) and preventing automatic low-pass filtering, UI67 treats the audio stream as a broad-spectrum data carrier rather than purely an acoustic medium.
+
+## 2. Terminology
+
+* **Ultrasonic Audio:** Audio frequencies above approximately 20,000 Hz.
+* **Brick Wall Filter:** A strict low-pass filter applied by codecs like AAC to cut frequencies above ~18 kHz.
+* **Chunk:** A distinct block of data within the file containing a header and payload (e.g., Audio, Video).
+* **Magic Bytes:** A sequence of bytes at the beginning of the file used to identify the format.
+
+## 3. File Structure Specification
+
+The UI67 format utilizes a chunk-based binary structure. All multi-byte integers are stored in **Little-Endian** format, consistent with the reference implementation.
+
+### 3.1. File Header
+
+The file begins with a fixed **40-byte** header containing global metadata.
+
+| Offset | Field | Type | Size | Description |
+| --- | --- | --- | --- | --- |
+| 0 | **Magic** | ASCII | 4 bytes | Must be `UI67`. |
+| 4 | **Version** | `uint16` | 2 bytes | File format version (e.g., `1`). |
+| 6 | **Total Length** | `uint64` | 8 bytes | Total size of the file in bytes. |
+| 14 | **Video Codec** | ASCII | 4 bytes | FourCC identifier (e.g., `H264`, `NONE`). |
+| 18 | **Audio Codec** | ASCII | 4 bytes | FourCC identifier (e.g., `FLAC`, `PCM `). |
+| 22 | **Sample Rate** | `uint32` | 4 bytes | Audio sample rate in Hz (e.g., `96000`). |
+| 26 | **Channels** | `uint8` | 1 byte | Number of audio channels (e.g., `2`). |
+| 27 | **Bit Depth** | `uint8` | 1 byte | Bits per sample (e.g., `16`, `24`). |
+| 28 | **Duration** | `uint64` | 8 bytes | Stream duration in milliseconds. |
+| 36 | **Reserved** | `byte` | 4 bytes | Reserved for future metadata (e.g., target freq). |
+
+### 3.2. Chunk Structure
+
+Following the header, the file consists of a sequence of data chunks. Each chunk begins with a **12-byte** preamble.
+
+| Field | Type | Size | Description |
+| --- | --- | --- | --- |
+| **Chunk ID** | ASCII | 4 bytes | Identifier (e.g., `AUDO`). |
+| **Chunk Length** | `uint64` | 8 bytes | Size of the data payload in bytes. |
+| **Data** | Binary | Variable | The actual stream data. |
+
+### 3.3. Defined Chunk Types
+
+#### 3.3.1. Audio Stream Chunk (`AUDO`)
+
+Contains the audio signal.
+
+* **ID:** `AUDO`
+* **Payload:** Raw audio frames.
+* If **Audio Codec** header is `PCM `, payload is signed integer PCM data.
+* If **Audio Codec** header is `FLAC`, payload is a standard FLAC stream.
+
+
+
+#### 3.3.2. Video Stream Chunk (`VIDO`)
+
+Contains the video signal.
+
+* **ID:** `VIDO`
+* **Payload:** Video elementary stream (e.g., raw H.264 NAL units).
+
+#### 3.3.3. End Chunk (`END `)
+
+Marks the end of the valid file stream.
+
+* **ID:** `END ` (Note the trailing space)
+* **Length:** `0`
+* **Payload:** None.
+
+## 4. Implementation Details
+
+### 4.1. Reference Encoding
+
+The reference implementation uses the Web Audio API to bypass browser compression.
+
+* **Sampling:** The Nyquist-Shannon theorem dictates the sample rate must be at least 2x the highest target frequency. To capture ultrasonics up to 48 kHz, a sample rate of **96 kHz** is recommended.
+* **Data View:** The reference JavaScript implementation explicitly sets `littleEndian=true` for all `DataView` operations (e.g., `view.setUint32(22, ctx.sampleRate, true)`).
+
+### 4.2. Codec Identifiers
+
+The following FourCC codes are defined for use in the Header:
+
+* `PCM `: Uncompressed PCM Audio (Reference implementation default).
+* `FLAC`: Free Lossless Audio Codec (Proposed for efficiency).
+* `H264`: H.264/MPEG-4 AVC Video.
+* `NONE`: No stream present.
+
+## 5. Security and Privacy Considerations
+
+The capability to store inaudible high-frequency data introduces steganographic risks:
+
+1. **Cross-Device Tracking:** Ultrasonic beacons can be embedded to link devices (e.g., TV to Mobile) without user consent.
+2. **Covert Communication:** Encrypted data payloads can be hidden within innocuous video files, bypassing standard audio inspection tools that ignore >20 kHz spectrum.
+
+## 6. References
+
+1. **Overview:** `overview.md` - Technical Overview & Format Specification.
+2. **Implementation:** `UltraSonicIn67.js` - Reference React Implementation.

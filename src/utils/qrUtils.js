@@ -1,5 +1,7 @@
+import jsQR from 'jsqr';
+
 export class QRProcessor {
-  // Add the missing getVersionSpec method
+
     getVersionSpec(version) {
         const specs = {
             1: { size: 21, capacity: 25, chunkSize: 6 },
@@ -8,23 +10,13 @@ export class QRProcessor {
             4: { size: 33, capacity: 114, chunkSize: 6 },
             5: { size: 37, capacity: 154, chunkSize: 6 }
         };
-
-        if (!specs[version]) {
-            throw new Error(`Unsupported QR version: ${version}`);
-        }
-
+        if (!specs[version]) throw new Error(`Unsupported QR version: ${version}`);
         return specs[version];
     }
 
-  async generateQR(text, version = 1) {
-    const spec = this.getVersionSpec(version);
-    console.log(`Generating QR for "${text}" (Version ${version})`);
-    
-
-        // Import QRCode library
+    async generateQR(text, version = 1) {
+        const spec = this.getVersionSpec(version);
         const QRCode = (await import('qrcode')).default;
-        
-        // Generate QR code with specific options
         const qrOptions = {
             version: version,
             errorCorrectionLevel: 'M',
@@ -32,46 +24,23 @@ export class QRProcessor {
             width: spec.size,
             margin: 0
         };
-        
-        console.log(`🔧 QR options:`, qrOptions);
-        
-        // Generate the QR code matrix
-        const qrArray = await QRCode.toDataURL(text, qrOptions);
-        
-        // Since toDataURL doesn't give us the raw matrix, use create instead
-        const qrSegments = QRCode.create(text, qrOptions);
-        
-        // Extract the matrix from the QR segments
+
+        // Use create() to get the raw object, then extract modules
+        const qrRaw = QRCode.create(text, qrOptions);
+        const modules = qrRaw.modules.data; // Uint8Array of 0s and 1s
+        const size = qrRaw.modules.size;
+
+        // Convert flat array to 2D matrix
         const matrix = [];
-        const modules = qrSegments.modules;
-        const size = modules.size;
-        
-        console.log(`🔧 QR modules size: ${size}`);
-        
-        // Convert modules to 2D array
-        for (let row = 0; row < size; row++) {
-            matrix[row] = [];
-            for (let col = 0; col < size; col++) {
-                matrix[row][col] = modules.get(row, col) ? 1 : 0;
+        for (let i = 0; i < size; i++) {
+            const row = [];
+            for (let j = 0; j < size; j++) {
+                row.push(modules[i * size + j]);
             }
+            matrix.push(row);
         }
-        
-        // Validate matrix
-        if (matrix.length !== spec.size || !matrix[0] || matrix[0].length !== spec.size) {
-            console.warn(`Matrix size mismatch: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
-            throw new Error(`Invalid matrix size: expected ${spec.size}x${spec.size}, got ${matrix.length}x${matrix[0]?.length}`);
-        }
-        
-        console.log(`✅ Generated QR matrix: ${matrix.length}x${matrix[0].length}`);
-
-        console.log(matrix)
-
-        return {
-            matrix: matrix,
-            version: version,
-            text: text
-        };
-  }
+        return matrix;
+    }
 
   createFallbackTestMatrix(size, text) {
     // Create a basic pattern matrix for testing
@@ -104,38 +73,12 @@ export class QRProcessor {
     return matrix;
   }
 
-    // Updated getCycleTiming method with more accurate values
     getCycleTiming(version) {
-        const spec = this.getVersionSpec(version);
-
-        // Based on the encoder logs, we know:
-        // - Start marker: 100ms (0.1s)
-        // - Each chunk: 10ms (0.01s)
-        // - End marker: 100ms (0.1s)
-        // - Gap between columns: 0ms (no gap shown in logs)
-
-        const startMarker = 100;      // 100ms start marker
-        const endMarker = 100;        // 100ms end marker
-        const chunkDuration = 60;     // 60ms per chunk
-        const columnGap = 0;          // No gap between columns
-
-        // Calculate total chunks needed
-        const chunksPerColumn = Math.ceil(spec.size / spec.chunkSize);
-        const totalChunks = spec.size * chunksPerColumn;
-
-        const dataTime = totalChunks * chunkDuration; // Total data encoding time
-        const totalTime = startMarker + dataTime + endMarker;
-
-        return {
-            startMarker,        // 100ms
-            chunkDuration,      // 10ms per chunk
-            endMarker,          // 100ms
-            columnGap,          // 0ms gap between columns
-            dataTime,           // Total data time
-            totalTime,          // Total cycle time
-            chunksPerColumn,    // Chunks per column
-            totalChunks         // Total chunks
-        };
+        const cols = 21 + (version - 1) * 4;
+        const chunksPerCol = Math.ceil(cols / 6);
+        const dataTime = cols * chunksPerCol * 60;
+        const overhead = 100 + 100 + 300;
+        return { chunkDuration: 60, totalTime: dataTime + overhead };
     }
 
     processColumn(matrix, col, version) {
@@ -157,6 +100,80 @@ export class QRProcessor {
             chunks.push(value);
         }
         return chunks;
+    }
+
+    /**
+     * Decodes a raw binary matrix (2D array of 0s and 1s) into text.
+     */
+    async decodeMatrix(matrix, version) {
+        try {
+            const size = matrix.length;
+            const scale = 8; // Smaller scale is usually sufficient and faster
+            const canvasSize = size * scale;
+            const totalPixels = canvasSize * canvasSize;
+
+            // Create a buffer for pixel data manually (RGBA)
+            // This avoids Canvas API entirely if we just need to feed jsQR
+            // jsQR expects: Uint8ClampedArray (r,g,b,a, r,g,b,a...)
+
+            const data = new Uint8ClampedArray(totalPixels * 4);
+
+            // Fill data
+            for (let r = 0; r < size; r++) {
+                for (let c = 0; c < size; c++) {
+                    const isDark = matrix[r][c] === 1;
+                    const val = isDark ? 0 : 255; // Black or White
+
+                    // Fill the scaled block
+                    for (let y = 0; y < scale; y++) {
+                        for (let x = 0; x < scale; x++) {
+                            const pixelIndex = ((r * scale + y) * canvasSize + (c * scale + x)) * 4;
+                            data[pixelIndex + 0] = val; // R
+                            data[pixelIndex + 1] = val; // G
+                            data[pixelIndex + 2] = val; // B
+                            data[pixelIndex + 3] = 255; // Alpha
+                        }
+                    }
+                }
+            }
+
+            // Load jsQR
+            let jsQR;
+            if (typeof window.jsQR !== 'undefined') {
+                jsQR = window.jsQR;
+            } else {
+                try {
+                    const module = await import('jsqr');
+                    jsQR = module.default || module;
+                } catch(e) {
+                    console.error("jsQR library not found");
+                    return null;
+                }
+            }
+
+            // Attempt Decode
+            const code = jsQR(data, canvasSize, canvasSize, {
+                inversionAttempts: "attemptBoth",
+            });
+
+            if (code) {
+                console.log("✅ Matrix Decoded Successfully:", code.data);
+                return {
+                    version: version,
+                    data: code.data,
+                    confidence: 1.0
+                };
+            } else {
+                console.warn("❌ jsQR could not decode the reconstructed matrix.");
+                // Debug: Print matrix snippet to console
+                // console.log(matrix.map(row => row.join('')).join('\n'));
+                return null;
+            }
+
+        } catch (e) {
+            console.error("Matrix decoding error:", e);
+            return null;
+        }
     }
 
   // Add the decoding methods as well

@@ -2,38 +2,94 @@
 export class AudioProcessor {
     constructor() {
         this.audioContext = null;
-        this.sampleRate = 44100;
+        this.sampleRate = 44100; // Default, will be updated on init
+        this.MIN_REQUIRED_RATE = 88200; // RFC-676767 Requirement
     }
 
     async initAudioContext() {
         if (!this.audioContext || this.audioContext.state === 'closed') {
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
 
-            // Resume context if it's suspended
+            // Request high sample rate for ultrasonic support (RFC-UI67)
+            const options = {
+                sampleRate: 96000 // Preferred per RFC-UI67
+            };
+
+            try {
+                this.audioContext = new AudioContext(options);
+            } catch (e) {
+                console.warn("Could not set 96kHz sample rate, falling back to system default.");
+                this.audioContext = new AudioContext();
+            }
+
+            // Resume context if suspended
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
 
             this.sampleRate = this.audioContext.sampleRate;
             console.log(`Audio context initialized: ${this.sampleRate}Hz`);
+
+            // RFC-676767 Validation
+            if (this.sampleRate < this.MIN_REQUIRED_RATE) {
+                console.warn(`⚠️ Sample rate ${this.sampleRate}Hz is below the RFC-676767 requirement (88.2kHz). Ultrasonic decoding may fail.`);
+            }
         }
         return this.audioContext;
     }
 
+    /**
+     * RFC-676767 Frequency Specification
+     * Range: 21,000 Hz - 24,090 Hz
+     */
+    getFrequencyConfig() {
+        return {
+            // Data Grid: 22,200 Hz to 24,090 Hz
+            dataStart: 22200,
+            step: 30, // 30 Hz spacing
+            bins: 64, // 6-bit encoding
+
+            // Boundary Markers: 21,000 Hz - 21,900 Hz
+            markers: {
+                // Version Identifiers (Start Markers)
+                versionStart: {
+                    1: 21000,
+                    2: 21200,
+                    3: 21400,
+                    4: 21600,
+                    5: 21800
+                },
+                // Universal End Marker
+                end: {
+                    1: 21100,
+                    2: 21300,
+                    3: 21500,
+                    4: 21700,
+                    5: 21900
+                }
+            }
+        };
+    }
+
+    // Helper: Calculate frequency for a 6-bit chunk value (0-63)
+    getFrequencyForChunk(value) {
+        const config = this.getFrequencyConfig();
+        if (value < 0 || value >= config.bins) {
+            throw new Error(`Chunk value ${value} out of range (0-63)`);
+        }
+        return config.dataStart + (value * config.step);
+    }
+
     async loadAudioFile(file) {
-        // FIX: Guard against invalid inputs
         if (!file || !(file instanceof Blob)) {
             throw new Error(`Invalid input: Expected File or Blob, got ${Object.prototype.toString.call(file)}`);
         }
 
         let arrayBuffer;
-
-        // Robust way to get ArrayBuffer
         if (typeof file.arrayBuffer === 'function') {
             try {
                 arrayBuffer = await file.arrayBuffer();
             } catch (e) {
-                console.warn('file.arrayBuffer() failed, trying FileReader...', e);
                 arrayBuffer = await this.readFileAsArrayBuffer(file);
             }
         } else {
@@ -41,23 +97,14 @@ export class AudioProcessor {
         }
 
         await this.initAudioContext();
-
-        try {
-            return await this.audioContext.decodeAudioData(arrayBuffer);
-        } catch (error) {
-            throw new Error(`Failed to decode audio data: ${error.message}`);
-        }
+        return await this.audioContext.decodeAudioData(arrayBuffer);
     }
-    
-    // Helper for reading files in older environments
+
     readFileAsArrayBuffer(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = () => {
-                if (reader.result) resolve(reader.result);
-                else reject(new Error('File read result was empty'));
-            };
-            reader.onerror = () => reject(new Error(`FileReader error: ${reader.error?.message}`));
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
             reader.readAsArrayBuffer(file);
         });
     }
@@ -77,38 +124,35 @@ export class AudioProcessor {
     // Get boundary marker frequencies for QR versions
     getBoundaryMarkers() {
         return {
-            1: { start: 14000, end: 14100 },
-            2: { start: 14200, end: 14300 },
-            3: { start: 14400, end: 14500 },
-            4: { start: 14600, end: 14700 },
-            5: { start: 14800, end: 14900 }
+            1: { start: 21000, end: 21100 },
+            2: { start: 21200, end: 21300 },
+            3: { start: 21400, end: 21500 },
+            4: { start: 21600, end: 21700 },
+            5: { start: 21800, end: 21900 }
         };
     }
 
-    // Generate a pure sine wave tone
     generateTone(frequency, duration, amplitude = 0.1) {
-        if (!this.sampleRate) this.sampleRate = 48000;
+        const sampleRate = this.sampleRate;
+        const length = Math.floor(duration * sampleRate);
+        const samples = new Float32Array(length);
+        const omega = 2 * Math.PI * frequency / sampleRate;
 
-        const sampleCount = Math.floor(this.sampleRate * duration);
-        const samples = new Float32Array(sampleCount);
-        const omega = 2 * Math.PI * frequency / this.sampleRate; // Pre-calculate angular frequency
+        // Apply envelope to prevent clicking
+        const attackRelease = Math.min(length * 0.1, 500); // Short fade in/out
 
-        for (let i = 0; i < sampleCount; i++) {
-            // Apply a generic envelope to prevent clicking
-            let envelope = 1.0;
-            const attackRelease = Math.min(sampleCount * 0.1, 480); // 10% or ~10ms
-
+        for (let i = 0; i < length; i++) {
+            let envelope = 1;
             if (i < attackRelease) {
                 envelope = i / attackRelease;
-            } else if (i > sampleCount - attackRelease) {
-                envelope = (sampleCount - i) / attackRelease;
+            } else if (i > length - attackRelease) {
+                envelope = (length - i) / attackRelease;
             }
-
             samples[i] = amplitude * envelope * Math.sin(omega * i);
         }
-
         return samples;
     }
+
     // Fix AudioBuffer creation for browser compatibility
     mixAudioBuffers(originalBuffer, encodedSamples, amplitude = 0.1) {
         // Ensure audio context is available

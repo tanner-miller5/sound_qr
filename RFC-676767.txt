@@ -1,4 +1,4 @@
-# RFC 676767: Sound QR - Audio-Embedded QR Code Encoding Protocol
+# RFC 676767: Sound-QR - Audio-Embedded QR Code Encoding Protocol
 
 **Request for Comments: 676767**
 **Category: Experimental**
@@ -8,13 +8,13 @@
 
 ## Abstract
 
-This document specifies the Sound QR protocol, a method for encoding QR code data into audio files using high-frequency sound encoding techniques. The protocol enables embedding QR codes into existing audio content while preserving the original audio quality, and supports decoding from both audio files and real-time microphone input. The specification defines frequency allocation, timing structures, error correction mechanisms, and device compatibility requirements for reliable cross-platform implementation.
+This document specifies the Sound-QR protocol, a method for encoding QR code data into audio files using high-frequency sound encoding techniques. The protocol enables embedding QR codes into existing audio content while preserving the original audio quality, and supports decoding from both audio files and real-time microphone input. The specification defines frequency allocation, timing structures, error correction mechanisms, and device compatibility requirements for reliable cross-platform implementation.
 
 ## 1. Introduction
 
 ### 1.1 Purpose
 
-Sound QR addresses the need for invisible data transmission through audio channels while maintaining audio fidelity. The protocol is optimized for mobile devices and consumer audio equipment, utilizing the 14.0-17.1 kHz frequency range that is typically above human audible perception but within the capabilities of standard audio hardware.
+Sound-QR addresses the need for inaudible data transmission through audio channels while maintaining audio fidelity. The protocol utilizes the 21.0-24.09 kHz frequency range that is typically above human audible perception.
 
 ### 1.2 Requirements Language
 
@@ -35,17 +35,21 @@ This specification covers:
 
 ### 2.1 Encoding Methodology
 
-Sound QR employs a time-frequency mapping approach where:
+Sound-QR employs a time-frequency mapping approach where:
 - Each QR code column corresponds to specific time intervals in the audio
 - Column data is divided into 6-bit chunks with zero-padding
 - Each chunk maps to one of 64 fixed frequencies in a predetermined grid
 - Multiple encoding cycles provide redundancy and error correction
 
+All Sound-QR streams MUST be encapsulated within a **UI67** container.
+- **Audio Codec**: The UI67 Audio Chunk Header MUST specify `PCM` or `FLAC` to ensure lossless preservation of ultrasonic data.
+- **Sample Rate**: The UI67 Header `Sample Rate` field MUST be set to at least **88200** (88.2 kHz).
+
 ### 2.2 Frequency Allocation
 
-The protocol operates within a 3,090 Hz bandwidth from 14,000 Hz to 17,090 Hz:
-- **Boundary markers**: 14,000-14,900 Hz (900 Hz range)
-- **Data frequencies**: 15,200-17,090 Hz (1,890 Hz range)
+The protocol operates within a 3,090 Hz bandwidth from 21,000 Hz to 24,090 Hz:
+- **Boundary markers**: 21,000-21,900 Hz (900 Hz range)
+- **Data frequencies**: 22,200-24,090 Hz (1,890 Hz range)
 - **Separation gap**: 300 Hz minimum between boundary and data ranges
 
 ## 3. Technical Specifications
@@ -55,7 +59,7 @@ The protocol operates within a 3,090 Hz bandwidth from 14,000 Hz to 17,090 Hz:
 The data encoding uses a fixed 64-frequency grid:
 
 ```
-Frequency Grid: f(n) = 15,200 + (n × 30) Hz, where n = 0 to 63
+Frequency Grid: f(n) = 22,200 + (n × 30) Hz, where n = 0 to 63
 Total Span: 1,890 Hz
 Step Size: 30 Hz
 Detection Tolerance: ±10 Hz per frequency
@@ -63,21 +67,21 @@ Detection Tolerance: ±10 Hz per frequency
 
 
 **Frequency Distribution:**
-- Lowest frequency (n=0): 15,200 Hz
-- Highest frequency (n=63): 17,090 Hz
-- Inter-frequency buffer: ±15 Hz
+- Lowest frequency (n=0): 22,200 Hz
+- Highest frequency (n=63): 24,090 Hz
+- Frequency Bandwidth Allocation: ±15 Hz
 
 ### 3.2 Boundary Marker System
 
 Version identification uses frequency-specific marker pairs:
 
-| QR Version | Matrix Size | Start Marker | End Marker |
+| QR Version | Matrix Size | Start Marker | End Marker  |
 |------------|-------------|--------------|-------------|
-| Version 1  | 21×21       | 14,000 Hz    | 14,100 Hz   |
-| Version 2  | 25×25       | 14,200 Hz    | 14,300 Hz   |
-| Version 3  | 29×29       | 14,400 Hz    | 14,500 Hz   |
-| Version 4  | 33×33       | 14,600 Hz    | 14,700 Hz   |
-| Version 5  | 37×37       | 14,800 Hz    | 14,900 Hz   |
+| Version 1  | 21×21       | 21,000 Hz    | 21,100 Hz   |
+| Version 2  | 25×25       | 21,200 Hz    | 21,300 Hz   |
+| Version 3  | 29×29       | 21,400 Hz    | 21,500 Hz   |
+| Version 4  | 33×33       | 21,600 Hz    | 21,700 Hz   |
+| Version 5  | 37×37       | 21,800 Hz    | 21,900 Hz   |
 
 **Marker Requirements:**
 - Duration: 100ms each
@@ -90,38 +94,38 @@ Each QR column undergoes zero-padding and chunking:
 
 | Version | Rows | Padded Bits | Chunks | Time per Column |
 |---------|------|-------------|--------|-----------------|
-| 1       | 21   | 24 (add 3)  | 4      | 40ms           |
-| 2       | 25   | 30 (add 5)  | 5      | 50ms           |
-| 3       | 29   | 30 (add 1)  | 5      | 50ms           |
-| 4       | 33   | 36 (add 3)  | 6      | 60ms           |
-| 5       | 37   | 42 (add 5)  | 7      | 70ms           |
+| 1       | 21   | 24 (add 3)  | 4      | 240ms           |
+| 2       | 25   | 30 (add 5)  | 5      | 300ms           |
+| 3       | 29   | 30 (add 1)  | 5      | 300ms           |
+| 4       | 33   | 36 (add 3)  | 6      | 360ms           |
+| 5       | 37   | 42 (add 5)  | 7      | 420ms           |
 
 **Padding Formula:** `ceil(rows/6) * 6`
-**Time per Chunk:** 10ms
+**Time per Chunk:** 60ms
 
 ### 3.4 Cycle Timing Structure
 
 Each complete QR encoding cycle follows this structure:
 
 ```
-[Start Marker 100ms] → [Data Encoding] → [End Marker 100ms] → [Gap 100ms]
+[Start Marker 100ms] → [Data Encoding (Columns × Chunks_per_Col × 60ms)] → [End Marker 100ms] → [Gap 100ms]
 ```
 
 
 **Complete Cycle Durations:**
-- Version 1: 1,140ms (840ms data + 300ms overhead)
-- Version 2: 1,550ms (1,250ms data + 300ms overhead)
-- Version 3: 1,750ms (1,450ms data + 300ms overhead)
-- Version 4: 2,280ms (1,980ms data + 300ms overhead)
-- Version 5: 2,890ms (2,590ms data + 300ms overhead)
+- Version 1: 5,340ms (5,040ms data + 300ms overhead)
+- Version 2: 7,800ms (7,500ms data + 300ms overhead)
+- Version 3: 9,000ms (8,700ms data + 300ms overhead)
+- Version 4: 12,180ms (11,880ms data + 300ms overhead)
+- Version 5: 15,840ms (15,540ms data + 300ms overhead)
 
 ## 4. Audio Integration Requirements
 
 ### 4.1 Audio Format Compatibility
 
 **Sample Rate Requirements:**
-- Minimum: 44.1 kHz (CD quality)
-- Recommended: 48 kHz (digital standard)
+- **REQUIRED**: 88.2 kHz (or higher).
+- *Rationale*: To capture the upper bound of 24,105 (24,090 Hz + 15 Hz), the Nyquist theorem requires a sample rate > 48210 Hz.
 - Bit Depth: 16-bit minimum, 24-bit recommended
 
 **Channel Processing:**
@@ -137,49 +141,32 @@ Each complete QR encoding cycle follows this structure:
 
 Encoding requires minimum audio duration for redundancy:
 
-| Version | Minimum Duration | Recommended Duration |
-|---------|------------------|---------------------|
-| 1       | 4 seconds        | 6+ seconds          |
-| 2       | 5 seconds        | 7+ seconds          |
-| 3       | 6 seconds        | 8+ seconds          |
-| 4       | 7 seconds        | 10+ seconds         |
-| 5       | 9 seconds        | 13+ seconds         |
+| Version | Minimum Duration |
+|---------|------------------|
+| 1       | 17 seconds       |
+| 2       | 24 seconds       |
+| 3       | 27 seconds       |
+| 4       | 37 seconds       |
+| 5       | 48 seconds       |
 
 **Redundancy:** Minimum 3 complete cycles required
-**Noisy Environments:** 15+ seconds recommended for maximum reliability
+**Noisy Environments:** 48 seconds recommended for maximum reliability
 
-## 5. Device Compatibility and Capability Assessment
+## 5. Error Handling and Validation
 
-### 5.1 Device Categories
+### 5.1 Error Recovery Mechanisms
 
-Devices are classified based on frequency response capabilities:
+**Multi-Cycle Redundancy:**
+- Minimum 3 cycles for basic redundancy
+- Partial recovery possible with 2 valid cycles
+- Prioritize cycles with strongest marker signals
 
-**Full Capability (17.1+ kHz response):**
-- All QR versions supported (1-5)
-- Full reliability across entire operational range
+**QR Error Correction Integration:**
+- Apply standard QR error correction after matrix reconstruction
+- Audio-specific 20% threshold for early corruption detection
+- Standard QR can handle up to 30% corruption post-validation
 
-**Standard Capability (16.0-17.0 kHz response):**
-- Versions 1-4 fully supported
-- Version 5 may have reduced reliability
-
-**Limited Capability (15.5-15.9 kHz response):**
-- Versions 1-3 supported only
-- Versions 4-5 not recommended
-
-### 5.2 Capability Assessment Protocol
-
-Implementation MUST perform device assessment:
-
-1. **Frequency Response Test:**
-   - Sweep sine wave from 14.0-17.1 kHz at -30dB
-   - Measure response at key frequencies: 14.5, 15.5, 16.5, 17.1 kHz
-
-2. **Version Priority Assignment:**
-   - Full: Try versions 1,2,3,4,5 (all supported)
-   - Standard: Try versions 1,2,3,4 first, then 5 with warning
-   - Limited: Try versions 1,2,3 only (skip 4,5)
-
-## 6. Error Handling and Validation
+## 6. Validation Protocols
 
 ### 6.1 Validation Thresholds
 
@@ -192,34 +179,21 @@ Implementation MUST perform device assessment:
 - Timing validation: End marker MUST appear within expected timeframe
 - Orphaned marker handling: Incomplete marker pairs MUST be discarded
 
-### 6.2 Error Recovery Mechanisms
-
-**Multi-Cycle Redundancy:**
-- Minimum 3 cycles for basic redundancy
-- Partial recovery possible with 2 valid cycles
-- Prioritize cycles with strongest marker signals
-
-**QR Error Correction Integration:**
-- Apply standard QR error correction after matrix reconstruction
-- Audio-specific 20% threshold for early corruption detection
-- Standard QR can handle up to 30% corruption post-validation
-
 ## 7. Decoding Protocol
 
 ### 7.1 Decoding Process Flow
 
-1. **Device Capability Assessment** (Section 5.2)
-2. **Marker Detection:**
+1. **Marker Detection:**
    - Scan entire audio for start markers
    - Prioritize versions based on device capability
-3. **Cycle Validation:**
+2. **Cycle Validation:**
    - Calculate expected data duration from marker version
    - Verify matching end marker within timeframe
-4. **Data Extraction:**
+3. **Data Extraction:**
    - Process chunks in 60ms time slots
    - Map frequencies to 6-bit values (±10 Hz tolerance)
    - Reconstruct columns with padding validation
-5. **Matrix Reconstruction:**
+4. **Matrix Reconstruction:**
    - Apply QR error correction
    - Attempt multiple cycles if initial reconstruction fails
 
@@ -241,7 +215,7 @@ The protocol is designed to preserve original audio content:
 
 ### 8.2 Detection Resistance
 
-While not cryptographically secure, Sound QR provides:
+While not cryptographically secure, Sound-QR provides:
 - Frequency range above typical human perception
 - Minimal amplitude modification of source audio
 - No standardized detection signatures in audio analysis tools
@@ -277,6 +251,8 @@ This document does not require any IANA actions. The frequency allocations speci
 
 [RFC2119] Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, March 1997.
 
+[RFC-UI67] "The UI67 Multimedia Container Format", RFC 0067, Ultrasonic-in-67 Project.
+
 ### 11.2 Informative References
 
 [AUDIO-STEG] Various audio steganography techniques and frequency analysis methods in digital signal processing literature.
@@ -287,8 +263,8 @@ This document does not require any IANA actions. The frequency allocations speci
 
 **Authors' Addresses:**
 
-Sound QR Protocol Development Team
-Email:
+Sound-QR Protocol Development Team
+Names: Marcus Miller
 
 **Copyright Notice:**
 
